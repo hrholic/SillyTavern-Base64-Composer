@@ -56,6 +56,20 @@ test('entrypoint keeps composer support and does not trigger send or generation 
     assert.match(source, /panel\.hidden = !panel\.hidden/);
     assert.match(source, /copyText\(snapshot\.payload\)/);
     assert.doesNotMatch(source, /context\.saveChat\?\.\(\)/);
+    assert.match(source, /getElementById\('extensionsMenu'\)/);
+    assert.match(source, /extensionsMenuExtensionButton/);
+    assert.match(source, />B64 悬浮窗</);
+    assert.match(source, /floatingVisible: stored\.floatingVisible !== false/);
+    assert.match(source, /floatingVisible: settings\.floatingVisible/);
+    assert.match(source, /const isFirstInstall = storedValue === null/);
+    assert.match(source, /outgoingAdapterEnabled: true/);
+    assert.match(source, /responseNormalizerEnabled: false/);
+    assert.match(source, /protectRequest: true/);
+    assert.match(source, /protectDatabase: true/);
+    assert.match(source, /isFirstInstall\s*\? \{ \.\.\.stored, \.\.\.FIRST_INSTALL_PIPELINE_DEFAULTS \}\s*:\s*stored/s);
+    const visibilityToggle = source.match(/function toggleFloatingVisible\(\) \{([\s\S]*?)\n    \}/)?.[1] ?? '';
+    assert.match(visibilityToggle, /settings = \{ \.\.\.settings, floatingVisible \}/);
+    assert.doesNotMatch(visibilityToggle, /outgoingAdapterEnabled|responseNormalizerEnabled|protectRequest|protectDatabase|restore\(/);
 });
 
 test('response adaptation is restricted to the OpenAI-compatible chat completion endpoint', async () => {

@@ -17,9 +17,16 @@ import {
 import { copyText } from './clipboard.js';
 
 const ROOT_ID = 'base64-composer-float';
+const WAND_TOGGLE_ID = 'base64-composer-wand-toggle';
 const STORAGE_KEY = 'base64-composer-position-v1';
 const SETTINGS_KEY = 'base64-composer-settings-v1';
 const TEXTAREA_SELECTOR = '#send_textarea';
+const FIRST_INSTALL_PIPELINE_DEFAULTS = Object.freeze({
+    outgoingAdapterEnabled: true,
+    responseNormalizerEnabled: false,
+    protectRequest: true,
+    protectDatabase: true,
+});
 
 let cleanupCurrentMount = null;
 
@@ -55,13 +62,19 @@ function savePosition(position) {
 
 function loadSettings() {
     try {
-        const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY)) ?? {};
+        const storedValue = localStorage.getItem(SETTINGS_KEY);
+        const isFirstInstall = storedValue === null;
+        const stored = isFirstInstall ? {} : JSON.parse(storedValue) ?? {};
+        const pipelineSource = isFirstInstall
+            ? { ...stored, ...FIRST_INSTALL_PIPELINE_DEFAULTS }
+            : stored;
         return {
             ...normalizeEncodingSettings(stored),
-            ...normalizePipelineSettings(stored),
+            ...normalizePipelineSettings(pipelineSource),
             mode: 'structured',
             outgoingMode: 'chunked',
             theme: stored.theme === 'light' ? 'light' : 'dark',
+            floatingVisible: stored.floatingVisible !== false,
         };
     } catch {
         return {
@@ -70,6 +83,7 @@ function loadSettings() {
             mode: 'structured',
             outgoingMode: 'chunked',
             theme: 'dark',
+            floatingVisible: true,
         };
     }
 }
@@ -137,11 +151,35 @@ function createFloatingControl() {
     return root;
 }
 
+function createWandToggle() {
+    document.getElementById(WAND_TOGGLE_ID)?.remove();
+    const extensionsMenu = document.getElementById('extensionsMenu');
+    if (!extensionsMenu) {
+        return null;
+    }
+
+    const item = document.createElement('div');
+    item.id = WAND_TOGGLE_ID;
+    item.className = 'list-group-item flex-container flexGap5';
+    item.tabIndex = 0;
+    item.setAttribute('role', 'menuitemcheckbox');
+    item.innerHTML = `
+        <div class="fa-solid fa-window-restore extensionsMenuExtensionButton" aria-hidden="true"></div>
+        <span>B64 悬浮窗</span>
+        <input class="b64c-wand-checkbox" type="checkbox" tabindex="-1" aria-hidden="true">
+    `;
+    extensionsMenu.prepend(item);
+    return item;
+}
+
 function mount() {
     cleanupCurrentMount?.();
     document.getElementById(ROOT_ID)?.remove();
+    document.getElementById(WAND_TOGGLE_ID)?.remove();
 
     const root = createFloatingControl();
+    const wandToggle = createWandToggle();
+    const wandCheckbox = wandToggle?.querySelector('.b64c-wand-checkbox');
     const action = root.querySelector('.b64c-action');
     const menu = root.querySelector('.b64c-menu');
     const toast = root.querySelector('.b64c-toast');
@@ -155,6 +193,7 @@ function mount() {
     const copyButton = root.querySelector('.b64c-copy');
     const themeButton = root.querySelector('.b64c-theme');
     let settings = loadSettings();
+    const savedPosition = loadSavedPosition();
     const targetResolver = createTextareaTargetResolver(document, {
         composerSelector: TEXTAREA_SELECTOR,
     });
@@ -218,6 +257,33 @@ function mount() {
         }
     }
 
+    function toggleFloatingVisible() {
+        const floatingVisible = !settings.floatingVisible;
+        if (!floatingVisible) {
+            setMenuOpen(false);
+        }
+        settings = { ...settings, floatingVisible };
+        saveSettings(settings);
+        syncSettingsUI();
+        if (floatingVisible) {
+            requestAnimationFrame(() => {
+                if (savedPosition) {
+                    applyPosition(savedPosition);
+                } else {
+                    keepInViewport();
+                }
+            });
+        }
+    }
+
+    function onWandToggleKeyDown(event) {
+        if (event.key !== 'Enter' && event.key !== ' ') {
+            return;
+        }
+        event.preventDefault();
+        toggleFloatingVisible();
+    }
+
     function syncSettingsUI() {
         chunkSizeInput.value = String(settings.chunkSize);
         outgoingInput.checked = settings.outgoingAdapterEnabled;
@@ -226,6 +292,12 @@ function mount() {
         databaseInput.checked = settings.protectDatabase;
         chunkField.hidden = false;
         root.classList.toggle('b64c-send-enabled', settings.outgoingAdapterEnabled);
+        root.hidden = !settings.floatingVisible;
+        if (wandToggle && wandCheckbox) {
+            wandCheckbox.checked = settings.floatingVisible;
+            wandToggle.setAttribute('aria-checked', String(settings.floatingVisible));
+            wandToggle.title = settings.floatingVisible ? '隐藏 B64 悬浮窗' : '显示 B64 悬浮窗';
+        }
         root.dataset.theme = settings.theme;
         action.setAttribute('aria-pressed', String(settings.outgoingAdapterEnabled));
         action.setAttribute('aria-label', settings.outgoingAdapterEnabled
@@ -269,6 +341,7 @@ function mount() {
                 protectDatabase: databaseInput.checked,
             }),
             theme: settings.theme,
+            floatingVisible: settings.floatingVisible,
         };
         syncSettingsUI();
         saveSettings(settings);
@@ -472,7 +545,6 @@ function mount() {
         context.event_types?.CHAT_LOADED,
     ].filter(Boolean) : [];
 
-    const savedPosition = loadSavedPosition();
     syncSettingsUI();
     updatePreview();
     scheduleBadgeSync();
@@ -480,6 +552,9 @@ function mount() {
         fetchNormalizer.enable();
     }
     requestAnimationFrame(() => {
+        if (!settings.floatingVisible) {
+            return;
+        }
         if (savedPosition) {
             applyPosition(savedPosition);
         } else {
@@ -499,6 +574,8 @@ function mount() {
     responseInput.addEventListener('change', updateSettings);
     requestInput.addEventListener('change', updateSettings);
     databaseInput.addEventListener('change', updateSettings);
+    wandToggle?.addEventListener('click', toggleFloatingVisible);
+    wandToggle?.addEventListener('keydown', onWandToggleKeyDown);
     document.addEventListener('focusin', onDocumentFocusIn, true);
     document.addEventListener('pointerdown', onOutsidePointerDown, true);
     window.addEventListener('resize', keepInViewport);
@@ -525,6 +602,8 @@ function mount() {
         responseInput.removeEventListener('change', updateSettings);
         requestInput.removeEventListener('change', updateSettings);
         databaseInput.removeEventListener('change', updateSettings);
+        wandToggle?.removeEventListener('click', toggleFloatingVisible);
+        wandToggle?.removeEventListener('keydown', onWandToggleKeyDown);
         document.removeEventListener('focusin', onDocumentFocusIn, true);
         document.removeEventListener('pointerdown', onOutsidePointerDown, true);
         window.removeEventListener('resize', keepInViewport);
@@ -537,6 +616,7 @@ function mount() {
             .forEach((element) => element.remove());
         temporaryMessageAdapter?.destroy();
         fetchNormalizer.destroy();
+        wandToggle?.remove();
         root.remove();
     };
 }

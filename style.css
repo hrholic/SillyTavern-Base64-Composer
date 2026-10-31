@@ -20,6 +20,15 @@
     -webkit-user-select: none;
 }
 
+#base64-composer-float[hidden] {
+    display: none;
+}
+
+#base64-composer-wand-toggle .b64c-wand-checkbox {
+    margin-inline-start: auto;
+    pointer-events: none;
+}
+
 #base64-composer-float[data-theme="light"] {
     --b64c-border: rgba(24, 24, 30, 0.5);
     --b64c-border-active: rgba(24, 24, 30, 0.9);

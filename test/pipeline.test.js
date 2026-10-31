@@ -31,8 +31,17 @@ const eventTypes = {
 test('scatter transport preserves Unicode and every whitespace character exactly', () => {
     const original = '  中文🙂\n\r\n\t尾部  \n';
     const transport = buildScatterTransport(original, 3);
-    assert.match(transport, /^\[B64\/1 utf8; decode 1\.\.\d+, join\]/);
+    assert.match(transport, /^1\/\d+:[A-Za-z0-9+/]+=*/);
+    assert.doesNotMatch(transport, /\[B64\/1|\[\/B64\]/);
     assert.equal(decodeScatterTransport(transport), original);
+});
+
+test('scatter decoder keeps legacy wrapped snapshots readable', () => {
+    const original = '旧记录🙂';
+    const bare = buildScatterTransport(original, 3);
+    const total = bare.split('\n').length;
+    const legacy = `[B64/1 utf8; decode 1..${total}, join]\n${bare}\n[/B64]`;
+    assert.equal(decodeScatterTransport(legacy), original);
 });
 
 test('request preview and preparation share whole/chunked transport behavior', () => {
@@ -125,6 +134,7 @@ test('compact transports keep whitespace-only protected gaps literal and avoid v
         protectSpecifiedCode: true,
     });
     assert.doesNotMatch(scatter, /encoding:|reconstruct:|BASE64-SCATTER/);
+    assert.doesNotMatch(scatter, /\[B64\/1|\[\/B64\]/);
     assert.doesNotMatch(protectedText, /encoding:|reconstruct:|BASE64-PROTECTED|\[\[B:\d+\/\d+:Cg==\]\]/);
     assert.ok(protectedText.includes('<!-- Request: -->\n<plot>'));
     assert.equal(decodeRequestTransport(scatter), original);

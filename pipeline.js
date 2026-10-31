@@ -43,24 +43,27 @@ export function buildScatterTransport(text, requestedChunkSize = 8) {
     }
 
     const lines = chunks.map((data, offset) => `${offset + 1}/${chunks.length}:${data}`);
-    return [
-        `[B64/1 utf8; decode 1..${chunks.length}, join]`,
-        ...lines,
-        '[/B64]',
-    ].join('\n');
+    return lines.join('\n');
 }
 
 export function decodeScatterTransport(transport) {
-    const lines = transport.split('\n');
-    const headerMatch = lines[0]?.match(/^\[B64\/1 utf8; decode 1\.\.(\d+), join\]$/);
-    if (!headerMatch || lines.at(-1) !== '[/B64]') {
-        throw new Error('Invalid Base64 scatter transport.');
+    if (transport === '') {
+        return '';
     }
 
-    const chunkLines = lines.slice(1, -1);
-    if (Number(headerMatch[1]) !== chunkLines.length) {
-        throw new Error('Incomplete Base64 scatter transport.');
+    const lines = transport.split('\n');
+    const legacyHeader = lines[0]?.match(/^\[B64\/1 utf8; decode 1\.\.(\d+), join\]$/);
+    let chunkLines = lines;
+    if (legacyHeader) {
+        if (lines.at(-1) !== '[/B64]') {
+            throw new Error('Invalid Base64 scatter transport.');
+        }
+        chunkLines = lines.slice(1, -1);
+        if (Number(legacyHeader[1]) !== chunkLines.length) {
+            throw new Error('Incomplete Base64 scatter transport.');
+        }
     }
+
     return chunkLines.map((line, offset) => {
         const match = line.match(/^(\d+)\/(\d+):([A-Za-z0-9+/]*={0,2})$/);
         if (!match

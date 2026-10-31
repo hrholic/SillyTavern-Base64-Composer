@@ -1,5 +1,11 @@
 const BYTE_CHUNK_SIZE = 24 * 1024; // Divisible by 3, so joined Base64 chunks stay valid.
 
+export const DEFAULT_ENCODING_SETTINGS = Object.freeze({
+    mode: 'whole',
+    chunkSize: 8,
+    preserveTechnical: false,
+});
+
 /** Encode a JavaScript string as standard Base64 over its UTF-8 bytes. */
 export function utf8ToBase64(text) {
     const bytes = new TextEncoder().encode(text);
@@ -42,6 +48,88 @@ export function base64ToUtf8(base64) {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
+export function normalizeEncodingSettings(settings = {}) {
+    const mode = settings.mode === 'chunked' ? 'chunked' : 'whole';
+    const parsedSize = Number.parseInt(settings.chunkSize, 10);
+    return {
+        mode,
+        chunkSize: Number.isFinite(parsedSize) ? Math.min(1000, Math.max(1, parsedSize)) : 8,
+        preserveTechnical: settings.preserveTechnical === true,
+    };
+}
+
+/**
+ * Split only a conservative set of technical Markdown/HTML forms. Unclosed or
+ * ambiguous syntax remains ordinary text and is encoded.
+ */
+export function splitTechnicalSegments(text) {
+    const pattern = /(```[^\r\n]*\r?\n[\s\S]*?```|~~~[^\r\n]*\r?\n[\s\S]*?~~~|`[^`\r\n]+`|\[[^\]\r\n]+\]\((?:[^()\r\n]|\([^()\r\n]*\))*\)|<\/?[A-Za-z][^>\r\n]*>)/g;
+    const segments = [];
+    let cursor = 0;
+
+    for (const match of text.matchAll(pattern)) {
+        if (match.index > cursor) {
+            segments.push({ kind: 'plain', text: text.slice(cursor, match.index) });
+        }
+        segments.push({ kind: 'preserved', text: match[0] });
+        cursor = match.index + match[0].length;
+    }
+
+    if (cursor < text.length) {
+        segments.push({ kind: 'plain', text: text.slice(cursor) });
+    }
+
+    return segments.length > 0 ? segments : [{ kind: 'plain', text }];
+}
+
+export function decodeConversionParts(parts) {
+    return parts.map((part) => part.kind === 'encoded' ? base64ToUtf8(part.base64) : part.text).join('');
+}
+
+/** Create whole or independently decodable, numbered Base64 output. */
+export function encodeText(text, requestedSettings = {}) {
+    const settings = normalizeEncodingSettings(requestedSettings);
+    const sourceSegments = settings.preserveTechnical
+        ? splitTechnicalSegments(text)
+        : [{ kind: 'plain', text }];
+    const parts = [];
+
+    for (const segment of sourceSegments) {
+        if (segment.kind === 'preserved') {
+            parts.push(segment);
+            continue;
+        }
+
+        const codePoints = Array.from(segment.text);
+        const size = settings.mode === 'chunked' ? settings.chunkSize : Math.max(1, codePoints.length);
+        for (let offset = 0; offset < codePoints.length; offset += size) {
+            const chunk = codePoints.slice(offset, offset + size).join('');
+            parts.push({ kind: 'encoded', base64: utf8ToBase64(chunk) });
+        }
+    }
+
+    const encodedParts = parts.filter((part) => part.kind === 'encoded');
+    if (encodedParts.length === 0) {
+        return { output: text, parts, settings, changed: false };
+    }
+
+    let output;
+    if (settings.mode === 'chunked') {
+        let index = 0;
+        output = parts.map((part) => {
+            if (part.kind === 'preserved') {
+                return part.text;
+            }
+            index += 1;
+            return `${index}/${encodedParts.length}:${part.base64}`;
+        }).join('\n');
+    } else {
+        output = parts.map((part) => part.kind === 'encoded' ? part.base64 : part.text).join('');
+    }
+
+    return { output, parts, settings, changed: output !== text };
+}
+
 function defaultDispatchInput(textarea) {
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
 }
@@ -50,7 +138,11 @@ function defaultDispatchInput(textarea) {
  * State machine for safe textarea replacement and undo.
  * It never sends a message and never reads or writes chat history.
  */
-export function createComposerController(textareaOrResolver, dispatchInput = defaultDispatchInput) {
+export function createComposerController(
+    textareaOrResolver,
+    dispatchInput = defaultDispatchInput,
+    getEncodingSettings = () => DEFAULT_ENCODING_SETTINGS,
+) {
     let undoRecord = null;
     let internalWrite = false;
 
@@ -90,16 +182,21 @@ export function createComposerController(textareaOrResolver, dispatchInput = def
             }
 
             try {
-                const encoded = utf8ToBase64(original);
-                const decoded = base64ToUtf8(encoded);
+                const conversion = encodeText(original, getEncodingSettings());
+                const encoded = conversion.output;
+                const decoded = decodeConversionParts(conversion.parts);
 
                 if (decoded !== original) {
                     return { ok: false, code: 'round_trip_failed' };
                 }
 
+                if (!conversion.changed) {
+                    return { ok: false, code: 'nothing_to_encode' };
+                }
+
                 undoRecord = { textarea, original, encoded };
                 replaceValue(textarea, encoded);
-                return { ok: true, code: 'encoded', encoded };
+                return { ok: true, code: 'encoded', encoded, settings: conversion.settings };
             } catch (error) {
                 console.error('[Base64 Composer] Conversion failed.', error);
                 return { ok: false, code: 'conversion_failed' };

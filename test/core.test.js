@@ -7,6 +7,8 @@ import {
     createComposerController,
     createPointerInteraction,
     createTextareaTargetResolver,
+    decodeConversionParts,
+    encodeText,
     utf8ToBase64,
 } from '../core.js';
 
@@ -66,6 +68,33 @@ test('long content is encoded whole and restored exactly', () => {
     const original = '长文🙂 abc\n'.repeat(100_000);
     const encoded = utf8ToBase64(original);
     assert.equal(base64ToUtf8(encoded), original);
+});
+
+test('default settings preserve the original whole-Base64 behavior', () => {
+    const original = '默认整段🙂';
+    assert.equal(encodeText(original).output, Buffer.from(original).toString('base64'));
+});
+
+test('chunk mode splits by Unicode code point and every numbered chunk is standard Base64', () => {
+    const original = '你🙂好abc';
+    const conversion = encodeText(original, { mode: 'chunked', chunkSize: 2 });
+    const lines = conversion.output.split('\n');
+    assert.deepEqual(lines.map((line) => line.slice(0, line.indexOf(':'))), ['1/3', '2/3', '3/3']);
+    assert.deepEqual(
+        lines.map((line) => base64ToUtf8(line.slice(line.indexOf(':') + 1))),
+        ['你🙂', '好a', 'bc'],
+    );
+    assert.equal(decodeConversionParts(conversion.parts), original);
+});
+
+test('technical preservation is conservative and round-trips exact original text', () => {
+    const original = '正文 `x()` [文档](https://example.com/a) <span>尾部</span>\n```js\nconst x = 1;\n```';
+    const conversion = encodeText(original, { mode: 'chunked', chunkSize: 3, preserveTechnical: true });
+    assert.match(conversion.output, /`x\(\)`/);
+    assert.match(conversion.output, /\[文档\]\(https:\/\/example\.com\/a\)/);
+    assert.match(conversion.output, /<span>/);
+    assert.match(conversion.output, /```js\nconst x = 1;\n```/);
+    assert.equal(decodeConversionParts(conversion.parts), original);
 });
 
 test('empty input does nothing and emits no input event', () => {

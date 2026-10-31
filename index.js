@@ -3,10 +3,13 @@ import {
     createComposerController,
     createPointerInteraction,
     createTextareaTargetResolver,
+    DEFAULT_ENCODING_SETTINGS,
+    normalizeEncodingSettings,
 } from './core.js';
 
 const ROOT_ID = 'base64-composer-float';
 const STORAGE_KEY = 'base64-composer-position-v1';
+const SETTINGS_KEY = 'base64-composer-settings-v1';
 const TEXTAREA_SELECTOR = '#send_textarea';
 
 let cleanupCurrentMount = null;
@@ -41,6 +44,22 @@ function savePosition(position) {
     }
 }
 
+function loadEncodingSettings() {
+    try {
+        return normalizeEncodingSettings(JSON.parse(localStorage.getItem(SETTINGS_KEY)) ?? {});
+    } catch {
+        return { ...DEFAULT_ENCODING_SETTINGS };
+    }
+}
+
+function saveEncodingSettings(settings) {
+    try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch {
+        // Settings persistence is optional.
+    }
+}
+
 function createFloatingControl() {
     const root = document.createElement('div');
     root.id = ROOT_ID;
@@ -50,6 +69,22 @@ function createFloatingControl() {
             <span aria-hidden="true">B64</span>
         </button>
         <div class="b64c-menu" role="menu" hidden>
+            <label class="b64c-field">
+                <span>编码模式</span>
+                <select class="b64c-mode">
+                    <option value="whole">整段</option>
+                    <option value="chunked">分块</option>
+                </select>
+            </label>
+            <label class="b64c-field b64c-chunk-field" hidden>
+                <span>每块字符</span>
+                <input class="b64c-chunk-size" type="number" min="1" max="1000" step="1" inputmode="numeric" value="8">
+            </label>
+            <label class="b64c-check">
+                <input class="b64c-preserve" type="checkbox">
+                <span>保留技术格式</span>
+            </label>
+            <div class="b64c-hint">围栏/行内代码、Markdown 链接、HTML 标签保持原样</div>
             <button class="b64c-undo" type="button" role="menuitem" disabled>撤销转换</button>
         </div>
         <div class="b64c-toast" role="status" aria-live="polite"></div>
@@ -67,10 +102,19 @@ function mount() {
     const menu = root.querySelector('.b64c-menu');
     const undoButton = root.querySelector('.b64c-undo');
     const toast = root.querySelector('.b64c-toast');
+    const modeSelect = root.querySelector('.b64c-mode');
+    const chunkField = root.querySelector('.b64c-chunk-field');
+    const chunkSizeInput = root.querySelector('.b64c-chunk-size');
+    const preserveInput = root.querySelector('.b64c-preserve');
+    let encodingSettings = loadEncodingSettings();
     const targetResolver = createTextareaTargetResolver(document, {
         composerSelector: TEXTAREA_SELECTOR,
     });
-    const controller = createComposerController(targetResolver.resolve);
+    const controller = createComposerController(
+        targetResolver.resolve,
+        undefined,
+        () => encodingSettings,
+    );
     let toastTimer = null;
     let dragOrigin = null;
 
@@ -91,20 +135,22 @@ function mount() {
         const result = controller.encode();
         syncUndoState();
         const messages = {
-            encoded: '已整段转换',
             empty: '输入框为空',
             already_encoded: '已转换，请勿重复点击',
             round_trip_failed: '校验未通过，未替换',
             conversion_failed: '转换失败，未替换',
             no_target: '没有可转换的输入框',
+            nothing_to_encode: '没有需要编码的正文',
         };
-        showStatus(messages[result.code] ?? '未执行转换');
+        const successMessage = result.settings?.mode === 'chunked' ? '已分块转换' : '已整段转换';
+        showStatus(result.ok ? successMessage : (messages[result.code] ?? '未执行转换'));
     }
 
     function positionMenu() {
         const rect = action.getBoundingClientRect();
         const viewport = getViewport();
-        root.classList.toggle('b64c-menu-below', rect.top < viewport.top + 72);
+        const menuHeight = menu.getBoundingClientRect().height || 180;
+        root.classList.toggle('b64c-menu-below', rect.top < viewport.top + menuHeight + 8);
         root.classList.toggle('b64c-menu-align-left', rect.left < viewport.left + 120);
     }
 
@@ -115,6 +161,23 @@ function mount() {
             positionMenu();
             syncUndoState();
         }
+    }
+
+    function syncSettingsUI() {
+        modeSelect.value = encodingSettings.mode;
+        chunkSizeInput.value = String(encodingSettings.chunkSize);
+        preserveInput.checked = encodingSettings.preserveTechnical;
+        chunkField.hidden = encodingSettings.mode !== 'chunked';
+    }
+
+    function updateSettings() {
+        encodingSettings = normalizeEncodingSettings({
+            mode: modeSelect.value,
+            chunkSize: chunkSizeInput.value,
+            preserveTechnical: preserveInput.checked,
+        });
+        syncSettingsUI();
+        saveEncodingSettings(encodingSettings);
     }
 
     function applyPosition(position, persist = false) {
@@ -220,6 +283,7 @@ function mount() {
     }
 
     const savedPosition = loadSavedPosition();
+    syncSettingsUI();
     requestAnimationFrame(() => {
         if (savedPosition) {
             applyPosition(savedPosition);
@@ -234,6 +298,9 @@ function mount() {
     action.addEventListener('pointercancel', onPointerCancel);
     action.addEventListener('contextmenu', onContextMenu);
     undoButton.addEventListener('click', onUndo);
+    modeSelect.addEventListener('change', updateSettings);
+    chunkSizeInput.addEventListener('change', updateSettings);
+    preserveInput.addEventListener('change', updateSettings);
     document.addEventListener('input', onDocumentInput, true);
     document.addEventListener('focusin', onDocumentFocusIn, true);
     document.addEventListener('pointerdown', onOutsidePointerDown, true);
@@ -250,6 +317,9 @@ function mount() {
         action.removeEventListener('pointercancel', onPointerCancel);
         action.removeEventListener('contextmenu', onContextMenu);
         undoButton.removeEventListener('click', onUndo);
+        modeSelect.removeEventListener('change', updateSettings);
+        chunkSizeInput.removeEventListener('change', updateSettings);
+        preserveInput.removeEventListener('change', updateSettings);
         document.removeEventListener('input', onDocumentInput, true);
         document.removeEventListener('focusin', onDocumentFocusIn, true);
         document.removeEventListener('pointerdown', onOutsidePointerDown, true);

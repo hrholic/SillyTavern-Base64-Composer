@@ -50,11 +50,19 @@ function defaultDispatchInput(textarea) {
  * State machine for safe textarea replacement and undo.
  * It never sends a message and never reads or writes chat history.
  */
-export function createComposerController(textarea, dispatchInput = defaultDispatchInput) {
+export function createComposerController(textareaOrResolver, dispatchInput = defaultDispatchInput) {
     let undoRecord = null;
     let internalWrite = false;
 
-    function replaceValue(value) {
+    const resolveTextarea = typeof textareaOrResolver === 'function'
+        ? textareaOrResolver
+        : () => textareaOrResolver;
+
+    function isAvailable(textarea) {
+        return Boolean(textarea) && (!('isConnected' in textarea) || textarea.isConnected);
+    }
+
+    function replaceValue(textarea, value) {
         internalWrite = true;
         try {
             textarea.value = value;
@@ -66,13 +74,18 @@ export function createComposerController(textarea, dispatchInput = defaultDispat
 
     return {
         encode() {
+            const textarea = resolveTextarea();
+            if (!isAvailable(textarea)) {
+                return { ok: false, code: 'no_target' };
+            }
+
             const original = textarea.value;
 
             if (original.length === 0) {
                 return { ok: false, code: 'empty' };
             }
 
-            if (undoRecord && original === undoRecord.encoded) {
+            if (undoRecord?.textarea === textarea && original === undoRecord.encoded) {
                 return { ok: false, code: 'already_encoded' };
             }
 
@@ -84,8 +97,8 @@ export function createComposerController(textarea, dispatchInput = defaultDispat
                     return { ok: false, code: 'round_trip_failed' };
                 }
 
-                undoRecord = { original, encoded };
-                replaceValue(encoded);
+                undoRecord = { textarea, original, encoded };
+                replaceValue(textarea, encoded);
                 return { ok: true, code: 'encoded', encoded };
             } catch (error) {
                 console.error('[Base64 Composer] Conversion failed.', error);
@@ -98,19 +111,26 @@ export function createComposerController(textarea, dispatchInput = defaultDispat
                 return { ok: false, code: 'nothing_to_undo' };
             }
 
-            if (textarea.value !== undoRecord.encoded) {
+            if (!isAvailable(undoRecord.textarea)) {
+                undoRecord = null;
+                return { ok: false, code: 'target_unavailable' };
+            }
+
+            if (undoRecord.textarea.value !== undoRecord.encoded) {
                 undoRecord = null;
                 return { ok: false, code: 'content_changed' };
             }
 
             const original = undoRecord.original;
+            const textarea = undoRecord.textarea;
             undoRecord = null;
-            replaceValue(original);
+            replaceValue(textarea, original);
             return { ok: true, code: 'undone' };
         },
 
-        handleInput() {
-            if (!internalWrite && undoRecord) {
+        handleInput(eventOrTextarea = resolveTextarea()) {
+            const textarea = eventOrTextarea?.target ?? eventOrTextarea;
+            if (!internalWrite && undoRecord?.textarea === textarea) {
                 undoRecord = null;
                 return { invalidated: true };
             }
@@ -118,9 +138,53 @@ export function createComposerController(textarea, dispatchInput = defaultDispat
         },
 
         canUndo() {
-            return Boolean(undoRecord) && textarea.value === undoRecord.encoded;
+            return Boolean(undoRecord)
+                && isAvailable(undoRecord.textarea)
+                && undoRecord.textarea.value === undoRecord.encoded;
         },
     };
+}
+
+/** Route actions to an active message editor before the bottom composer. */
+export function createTextareaTargetResolver(documentObject, {
+    editSelector = 'textarea.edit_textarea',
+    composerSelector = '#send_textarea',
+    isVisible = (element) => {
+        if (!element?.isConnected || element.hidden) {
+            return false;
+        }
+        const view = element.ownerDocument?.defaultView;
+        const style = view?.getComputedStyle?.(element);
+        if (style?.display === 'none' || style?.visibility === 'hidden') {
+            return false;
+        }
+        return typeof element.getClientRects !== 'function' || element.getClientRects().length > 0;
+    },
+} = {}) {
+    const focusOrder = new WeakMap();
+    let focusSequence = 0;
+
+    function recordFocus(target) {
+        if (target?.matches?.(editSelector)) {
+            focusSequence += 1;
+            focusOrder.set(target, focusSequence);
+        }
+    }
+
+    function resolve() {
+        const editors = [...documentObject.querySelectorAll(editSelector)].filter(isVisible);
+        if (editors.length > 0) {
+            if (editors.includes(documentObject.activeElement)) {
+                return documentObject.activeElement;
+            }
+            return editors.reduce((latest, editor) => {
+                return (focusOrder.get(editor) ?? 0) >= (focusOrder.get(latest) ?? 0) ? editor : latest;
+            });
+        }
+        return documentObject.querySelector(composerSelector);
+    }
+
+    return { recordFocus, resolve };
 }
 
 /** Clamp a floating control to the current (possibly mobile visual) viewport. */

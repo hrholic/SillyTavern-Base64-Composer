@@ -6,6 +6,7 @@ import {
     clampPosition,
     createComposerController,
     createPointerInteraction,
+    createTextareaTargetResolver,
     utf8ToBase64,
 } from '../core.js';
 
@@ -14,6 +15,20 @@ class FakeTextarea extends EventTarget {
         super();
         this.value = value;
     }
+}
+
+function createTargetDocument(editors, composer) {
+    return {
+        activeElement: null,
+        querySelectorAll(selector) {
+            assert.equal(selector, 'textarea.edit_textarea');
+            return editors;
+        },
+        querySelector(selector) {
+            assert.equal(selector, '#send_textarea');
+            return composer;
+        },
+    };
 }
 
 function createFakeTimer() {
@@ -118,6 +133,66 @@ test('typing after conversion invalidates undo so it cannot overwrite new text',
     assert.equal(controller.canUndo(), false);
     assert.deepEqual(controller.undo(), { ok: false, code: 'nothing_to_undo' });
     assert.match(textarea.value, /用户新写内容$/);
+});
+
+test('visible message editor is preferred over the bottom composer', () => {
+    const composer = new FakeTextarea('底部草稿');
+    const editor = new FakeTextarea('消息编辑草稿');
+    const documentObject = createTargetDocument([editor], composer);
+    const resolver = createTextareaTargetResolver(documentObject, { isVisible: () => true });
+    const controller = createComposerController(resolver.resolve, () => {});
+
+    controller.encode();
+    assert.equal(editor.value, Buffer.from('消息编辑草稿').toString('base64'));
+    assert.equal(composer.value, '底部草稿');
+});
+
+test('most recently focused visible message editor wins after the floating button takes focus', () => {
+    const composer = new FakeTextarea('底部');
+    const first = new FakeTextarea('第一条');
+    const second = new FakeTextarea('第二条');
+    const documentObject = createTargetDocument([first, second], composer);
+    const resolver = createTextareaTargetResolver(documentObject, { isVisible: () => true });
+
+    resolver.recordFocus(first);
+    resolver.recordFocus(second);
+    documentObject.activeElement = { tagName: 'BUTTON' };
+    assert.equal(resolver.resolve(), second);
+});
+
+test('bottom composer remains the fallback when no message editor is visible', () => {
+    const composer = new FakeTextarea('底部草稿');
+    const hiddenEditor = new FakeTextarea('隐藏编辑');
+    const documentObject = createTargetDocument([hiddenEditor], composer);
+    const resolver = createTextareaTargetResolver(documentObject, { isVisible: () => false });
+    assert.equal(resolver.resolve(), composer);
+});
+
+test('undo stays bound to its original editor and never overwrites a different current target', () => {
+    const first = new FakeTextarea('第一条');
+    const second = new FakeTextarea('第二条');
+    let current = first;
+    const controller = createComposerController(() => current, () => {});
+
+    controller.encode();
+    current = second;
+    assert.equal(controller.undo().code, 'undone');
+    assert.equal(first.value, '第一条');
+    assert.equal(second.value, '第二条');
+});
+
+test('undo does not fall through to composer after the original editor is removed', () => {
+    const editor = new FakeTextarea('编辑草稿');
+    editor.isConnected = true;
+    const composer = new FakeTextarea('底部草稿');
+    let current = editor;
+    const controller = createComposerController(() => current, () => {});
+
+    controller.encode();
+    editor.isConnected = false;
+    current = composer;
+    assert.equal(controller.undo().code, 'target_unavailable');
+    assert.equal(composer.value, '底部草稿');
 });
 
 test('short mouse tap immediately invokes only the default conversion action', () => {

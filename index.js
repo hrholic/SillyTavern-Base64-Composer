@@ -2,6 +2,7 @@ import {
     clampPosition,
     createComposerController,
     createPointerInteraction,
+    createTextareaTargetResolver,
 } from './core.js';
 
 const ROOT_ID = 'base64-composer-float';
@@ -61,18 +62,15 @@ function mount() {
     cleanupCurrentMount?.();
     document.getElementById(ROOT_ID)?.remove();
 
-    const textarea = document.querySelector(TEXTAREA_SELECTOR);
-    if (!textarea) {
-        console.warn('[Base64 Composer] #send_textarea was not found.');
-        return;
-    }
-
     const root = createFloatingControl();
     const action = root.querySelector('.b64c-action');
     const menu = root.querySelector('.b64c-menu');
     const undoButton = root.querySelector('.b64c-undo');
     const toast = root.querySelector('.b64c-toast');
-    const controller = createComposerController(textarea);
+    const targetResolver = createTextareaTargetResolver(document, {
+        composerSelector: TEXTAREA_SELECTOR,
+    });
+    const controller = createComposerController(targetResolver.resolve);
     let toastTimer = null;
     let dragOrigin = null;
 
@@ -98,6 +96,7 @@ function mount() {
             already_encoded: '已转换，请勿重复点击',
             round_trip_failed: '校验未通过，未替换',
             conversion_failed: '转换失败，未替换',
+            no_target: '没有可转换的输入框',
         };
         showStatus(messages[result.code] ?? '未执行转换');
     }
@@ -198,15 +197,20 @@ function mount() {
             undone: '已撤销',
             nothing_to_undo: '没有可撤销的转换',
             content_changed: '内容已改动，未覆盖',
+            target_unavailable: '原编辑框已关闭，未覆盖',
         };
         showStatus(messages[result.code] ?? '未执行撤销');
     }
 
-    function onTextareaInput() {
-        const result = controller.handleInput();
+    function onDocumentInput(event) {
+        const result = controller.handleInput(event);
         if (result.invalidated) {
             syncUndoState();
         }
+    }
+
+    function onDocumentFocusIn(event) {
+        targetResolver.recordFocus(event.target);
     }
 
     function onOutsidePointerDown(event) {
@@ -230,7 +234,8 @@ function mount() {
     action.addEventListener('pointercancel', onPointerCancel);
     action.addEventListener('contextmenu', onContextMenu);
     undoButton.addEventListener('click', onUndo);
-    textarea.addEventListener('input', onTextareaInput);
+    document.addEventListener('input', onDocumentInput, true);
+    document.addEventListener('focusin', onDocumentFocusIn, true);
     document.addEventListener('pointerdown', onOutsidePointerDown, true);
     window.addEventListener('resize', keepInViewport);
     window.visualViewport?.addEventListener('resize', keepInViewport);
@@ -245,7 +250,8 @@ function mount() {
         action.removeEventListener('pointercancel', onPointerCancel);
         action.removeEventListener('contextmenu', onContextMenu);
         undoButton.removeEventListener('click', onUndo);
-        textarea.removeEventListener('input', onTextareaInput);
+        document.removeEventListener('input', onDocumentInput, true);
+        document.removeEventListener('focusin', onDocumentFocusIn, true);
         document.removeEventListener('pointerdown', onOutsidePointerDown, true);
         window.removeEventListener('resize', keepInViewport);
         window.visualViewport?.removeEventListener('resize', keepInViewport);

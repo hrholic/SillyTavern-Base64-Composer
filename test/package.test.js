@@ -39,12 +39,12 @@ test('entrypoint keeps composer support and does not trigger send or generation 
     assert.doesNotMatch(source, /b64c-manual|b64c-undo|b64c-preserve/);
     assert.doesNotMatch(source, /b64c-send-status/);
     assert.match(source, /class="b64c-theme"/);
-    assert.match(source, /class="b64c-protect"/);
+    assert.match(source, /class="b64c-protect-request"/);
     assert.match(source, /class="b64c-copy"/);
     assert.match(source, /<details class="b64c-pipeline-hint">/);
     assert.match(source, /mode: 'structured'/);
     assert.match(source, /outgoingMode: 'chunked'/);
-    assert.match(source, /protectSpecifiedCode: protectInput\.checked/);
+    assert.match(source, /protectRequest: requestInput\.checked/);
     assert.match(source, /theme: stored\.theme === 'light'/);
     assert.match(source, /badge\.addEventListener\('click'/);
     assert.match(source, /panel\.hidden = !panel\.hidden/);
@@ -57,3 +57,4 @@ test('response adaptation is restricted to the OpenAI-compatible chat completion
     assert.match(source, /\/api\/backends\/chat-completions\/generate/);
     assert.doesNotMatch(source, /text-completions\/generate|gateway|temperature|top_p|tool_choice/);
 });
+

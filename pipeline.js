@@ -11,6 +11,8 @@ export const DEFAULT_PIPELINE_SETTINGS = Object.freeze({
     responseNormalizerEnabled: false,
     outgoingMode: 'chunked',
     protectSpecifiedCode: false,
+    protectRequest: false,
+    protectDatabase: false,
 });
 
 export function normalizePipelineSettings(settings = {}) {
@@ -19,6 +21,10 @@ export function normalizePipelineSettings(settings = {}) {
         responseNormalizerEnabled: settings.responseNormalizerEnabled === true,
         outgoingMode: settings.outgoingMode === 'whole' ? 'whole' : 'chunked',
         protectSpecifiedCode: settings.protectSpecifiedCode === true,
+        protectRequest: settings.protectRequest === undefined
+            ? settings.protectSpecifiedCode === true : settings.protectRequest === true,
+        protectDatabase: settings.protectDatabase === undefined
+            ? settings.protectSpecifiedCode === true : settings.protectDatabase === true,
     };
 }
 
@@ -106,10 +112,10 @@ export function decodeProtectedTransport(transport) {
     return decoded;
 }
 
-export function buildProtectedTransport(text, requestedChunkSize = 8) {
+export function buildProtectedTransport(text, requestedChunkSize = 8, protection = {}) {
     const parsedSize = Number.parseInt(requestedChunkSize, 10);
     const chunkSize = Number.isFinite(parsedSize) ? Math.min(1000, Math.max(1, parsedSize)) : 8;
-    const segments = splitProtectedSegments(text);
+    const segments = splitProtectedSegments(text, protection);
     const parts = [];
 
     for (const segment of segments) {
@@ -161,8 +167,9 @@ export function decodeRequestTransport(transport) {
 
 /** The single conversion entry used by both preview and request preparation. */
 export function buildRequestTransport(text, settings = {}) {
-    if (settings.protectSpecifiedCode === true) {
-        return buildProtectedTransport(text, settings.chunkSize);
+    const protection = normalizePipelineSettings(settings);
+    if (protection.protectRequest || protection.protectDatabase) {
+        return buildProtectedTransport(text, settings.chunkSize, protection);
     }
     const mode = settings.outgoingMode === 'whole' ? 'whole' : 'chunked';
     const chunkSize = mode === 'whole' ? Math.max(1, Array.from(text).length) : settings.chunkSize;
@@ -649,3 +656,4 @@ export function createScopedFetchNormalizer(windowObject) {
 
     return { enable, disable, destroy: disable, isEnabled: () => enabled };
 }
+

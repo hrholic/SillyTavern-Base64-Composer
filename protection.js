@@ -175,12 +175,12 @@ function findSystemDirectiveEnd(text, start) {
     return text.length;
 }
 
-function appendRequestBodySegments(segments, body) {
+function appendRequestBodySegments(segments, body, protection) {
     const tokenPattern = /Character\(s\)|User|\s+/g;
     let cursor = 0;
     for (const match of body.matchAll(tokenPattern)) {
         if (match.index > cursor) {
-            for (const segment of scanRange(body, cursor, match.index)) {
+            for (const segment of scanRange(body, cursor, match.index, protection)) {
                 appendSegment(segments, segment.kind, segment.text);
             }
         }
@@ -188,13 +188,15 @@ function appendRequestBodySegments(segments, body) {
         cursor = match.index + match[0].length;
     }
     if (cursor < body.length) {
-        for (const segment of scanRange(body, cursor, body.length)) {
+        for (const segment of scanRange(body, cursor, body.length, protection)) {
             appendSegment(segments, segment.kind, segment.text);
         }
     }
 }
 
-function scanRange(text, start = 0, end = text.length) {
+function scanRange(text, start = 0, end = text.length, protection = {}) {
+    const protectRequest = protection.protectRequest !== false;
+    const protectDatabase = protection.protectDatabase !== false;
     const segments = [];
     let plainStart = start;
     let cursor = start;
@@ -207,7 +209,7 @@ function scanRange(text, start = 0, end = text.length) {
     }
 
     while (cursor < end) {
-        if (text.startsWith('<!--', cursor)) {
+        if (protectRequest && text.startsWith('<!--', cursor)) {
             const close = text.indexOf('-->', cursor + 4);
             preserve(cursor, close < 0 || close + 3 > end ? end : close + 3);
             continue;
@@ -215,25 +217,25 @@ function scanRange(text, start = 0, end = text.length) {
 
         const fence = text.startsWith('```', cursor) ? '```'
             : text.startsWith('~~~', cursor) ? '~~~' : null;
-        if (fence) {
+        if (protectRequest && fence) {
             const close = text.indexOf(fence, cursor + fence.length);
             preserve(cursor, close < 0 || close + fence.length > end ? end : close + fence.length);
             continue;
         }
 
-        if (text[cursor] === '`') {
+        if (protectRequest && text[cursor] === '`') {
             const lineEnd = text.indexOf('\n', cursor + 1);
             const close = text.indexOf('`', cursor + 1);
             preserve(cursor, close < 0 || (lineEnd >= 0 && close > lineEnd) || close + 1 > end ? end : close + 1);
             continue;
         }
 
-        if (text.slice(cursor, cursor + 18).toUpperCase() === '[SYSTEM_DIRECTIVE:') {
+        if (protectRequest && text.slice(cursor, cursor + 18).toUpperCase() === '[SYSTEM_DIRECTIVE:') {
             preserve(cursor, Math.min(end, findSystemDirectiveEnd(text, cursor)));
             continue;
         }
 
-        if (text[cursor] === '[') {
+        if (protectDatabase && text[cursor] === '[') {
             const squareTag = readSquareTag(text, cursor);
             if (squareTag && !squareTag.closing && WHOLE_TAG_NAMES.has(squareTag.normalizedName)) {
                 const closingTag = findMatchingSquareTag(text, squareTag);
@@ -244,7 +246,7 @@ function scanRange(text, start = 0, end = text.length) {
 
         if (text[cursor] === '<') {
             const requestMatch = text.slice(cursor).match(/^<Request\s*:/i);
-            if (requestMatch) {
+            if (protectRequest && requestMatch) {
                 const requestEnd = findMarkupEnd(text, cursor);
                 if (requestEnd < 0 || requestEnd > end) {
                     preserve(cursor, end);
@@ -255,6 +257,7 @@ function scanRange(text, start = 0, end = text.length) {
                 appendRequestBodySegments(
                     segments,
                     text.slice(cursor + requestMatch[0].length, requestEnd - 1),
+                    protection,
                 );
                 appendSegment(segments, 'preserved', '>');
                 cursor = requestEnd;
@@ -264,13 +267,14 @@ function scanRange(text, start = 0, end = text.length) {
 
             const declarationEnd = text.startsWith('<!', cursor) || text.startsWith('<?', cursor)
                 ? findMarkupEnd(text, cursor) : -1;
-            if (declarationEnd > 0 && declarationEnd <= end) {
+            if (protectRequest && declarationEnd > 0 && declarationEnd <= end) {
                 preserve(cursor, declarationEnd);
                 continue;
             }
 
             const openingTag = readTag(text, cursor);
-            if (openingTag && openingTag.end <= end) {
+            if (openingTag && openingTag.end <= end
+                && (protectRequest || (protectDatabase && WHOLE_TAG_NAMES.has(openingTag.normalizedName)))) {
                 if (openingTag.closing || openingTag.selfClosing
                     || VOID_TAG_NAMES.has(openingTag.normalizedName)) {
                     preserve(cursor, openingTag.end);
@@ -282,14 +286,14 @@ function scanRange(text, start = 0, end = text.length) {
                     preserve(cursor, end);
                     continue;
                 }
-                if (WHOLE_TAG_NAMES.has(openingTag.normalizedName)) {
+                if (protectDatabase && WHOLE_TAG_NAMES.has(openingTag.normalizedName)) {
                     preserve(cursor, closingTag.end);
                     continue;
                 }
 
                 appendSegment(segments, 'plain', text.slice(plainStart, cursor));
                 appendSegment(segments, 'preserved', openingTag.raw);
-                for (const segment of scanRange(text, openingTag.end, closingTag.start)) {
+                for (const segment of scanRange(text, openingTag.end, closingTag.start, protection)) {
                     appendSegment(segments, segment.kind, segment.text);
                 }
                 appendSegment(segments, 'preserved', closingTag.raw);
@@ -310,7 +314,8 @@ function scanRange(text, start = 0, end = text.length) {
  * Split text without executing or reserializing any directive. Preserved
  * segments keep their original bytes and positions; plain prose may be encoded.
  */
-export function splitProtectedSegments(text) {
-    return scanRange(text);
+export function splitProtectedSegments(text, protection = {}) {
+    return scanRange(text, 0, text.length, protection);
 }
+
 

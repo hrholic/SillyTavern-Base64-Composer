@@ -108,12 +108,16 @@ function createFloatingControl() {
                 <span>响应正文提取</span>
             </label>
             <label class="b64c-check">
-                <input class="b64c-protect" type="checkbox">
-                <span>保护指定代码</span>
+                <input class="b64c-protect-request" type="checkbox">
+                <span>请求</span>
+            </label>
+            <label class="b64c-check">
+                <input class="b64c-protect-database" type="checkbox">
+                <span>数据库保护</span>
             </label>
             <details class="b64c-pipeline-hint">
                 <summary>说明</summary>
-                <div>发送时编码仅在请求装配时临时生效。保护指定代码会保留注释、指令标记、代码块和已知数据块，正文仍在原位置编码。</div>
+                <div>发送时编码仅在请求装配时临时生效。“请求”保留注释（含 &lt;!-- Request: --&gt;）、指令标记、代码块和标签结构；“数据库保护”保留 data、MVU、UpdateVariable 等数据块。两项独立生效，普通正文仍编码。</div>
             </details>
             <details class="b64c-preview-wrap">
                 <summary><span>实际发送预览</span><button class="b64c-copy" type="button">复制</button></summary>
@@ -138,7 +142,8 @@ function mount() {
     const chunkSizeInput = root.querySelector('.b64c-chunk-size');
     const outgoingInput = root.querySelector('.b64c-outgoing');
     const responseInput = root.querySelector('.b64c-response');
-    const protectInput = root.querySelector('.b64c-protect');
+    const requestInput = root.querySelector('.b64c-protect-request');
+    const databaseInput = root.querySelector('.b64c-protect-database');
     const preview = root.querySelector('.b64c-preview');
     const copyButton = root.querySelector('.b64c-copy');
     const themeButton = root.querySelector('.b64c-theme');
@@ -218,7 +223,8 @@ function mount() {
         chunkSizeInput.value = String(settings.chunkSize);
         outgoingInput.checked = settings.outgoingAdapterEnabled;
         responseInput.checked = settings.responseNormalizerEnabled;
-        protectInput.checked = settings.protectSpecifiedCode;
+        requestInput.checked = settings.protectRequest;
+        databaseInput.checked = settings.protectDatabase;
         chunkField.hidden = false;
         root.classList.toggle('b64c-send-enabled', settings.outgoingAdapterEnabled);
         root.dataset.theme = settings.theme;
@@ -260,7 +266,8 @@ function mount() {
                 outgoingAdapterEnabled: outgoingInput.checked,
                 responseNormalizerEnabled: responseInput.checked,
                 outgoingMode: 'chunked',
-                protectSpecifiedCode: protectInput.checked,
+                protectRequest: requestInput.checked,
+                protectDatabase: databaseInput.checked,
             }),
             theme: settings.theme,
         };
@@ -491,7 +498,8 @@ function mount() {
     chunkSizeInput.addEventListener('change', updateSettings);
     outgoingInput.addEventListener('change', updateSettings);
     responseInput.addEventListener('change', updateSettings);
-    protectInput.addEventListener('change', updateSettings);
+    requestInput.addEventListener('change', updateSettings);
+    databaseInput.addEventListener('change', updateSettings);
     document.addEventListener('focusin', onDocumentFocusIn, true);
     document.addEventListener('pointerdown', onOutsidePointerDown, true);
     window.addEventListener('resize', keepInViewport);
@@ -516,7 +524,8 @@ function mount() {
         chunkSizeInput.removeEventListener('change', updateSettings);
         outgoingInput.removeEventListener('change', updateSettings);
         responseInput.removeEventListener('change', updateSettings);
-        protectInput.removeEventListener('change', updateSettings);
+        requestInput.removeEventListener('change', updateSettings);
+        databaseInput.removeEventListener('change', updateSettings);
         document.removeEventListener('focusin', onDocumentFocusIn, true);
         document.removeEventListener('pointerdown', onOutsidePointerDown, true);
         window.removeEventListener('resize', keepInViewport);
@@ -548,3 +557,4 @@ function initialize() {
 }
 
 initialize();
+

@@ -1,0 +1,131 @@
+#base64-composer-float {
+    --b64c-border: rgba(255, 255, 255, 0.42);
+    --b64c-bg: rgba(24, 24, 30, 0.62);
+    --b64c-text: rgba(255, 255, 255, 0.92);
+    position: fixed;
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(90px, calc(env(safe-area-inset-bottom) + 70px));
+    z-index: 30000;
+    width: 48px;
+    height: 34px;
+    box-sizing: border-box;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#base64-composer-float .b64c-action {
+    width: 48px;
+    height: 34px;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--b64c-border);
+    border-radius: 10px;
+    background: var(--b64c-bg);
+    color: var(--b64c-text);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    font: 650 12px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    letter-spacing: 0.15px;
+    cursor: grab;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+#base64-composer-float .b64c-action:focus-visible,
+#base64-composer-float .b64c-undo:focus-visible {
+    outline: 2px solid rgba(125, 190, 255, 0.95);
+    outline-offset: 2px;
+}
+
+#base64-composer-float.b64c-dragging .b64c-action {
+    cursor: grabbing;
+    opacity: 0.88;
+}
+
+#base64-composer-float .b64c-menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 7px);
+    min-width: 112px;
+    padding: 5px;
+    box-sizing: border-box;
+    border: 1px solid var(--b64c-border);
+    border-radius: 9px;
+    background: rgba(24, 24, 30, 0.88);
+    box-shadow: 0 5px 18px rgba(0, 0, 0, 0.24);
+    backdrop-filter: blur(7px);
+    -webkit-backdrop-filter: blur(7px);
+}
+
+#base64-composer-float.b64c-menu-below .b64c-menu {
+    top: calc(100% + 7px);
+    bottom: auto;
+}
+
+#base64-composer-float.b64c-menu-align-left .b64c-menu {
+    right: auto;
+    left: 0;
+}
+
+#base64-composer-float .b64c-menu[hidden] {
+    display: none;
+}
+
+#base64-composer-float .b64c-undo {
+    width: 100%;
+    min-height: 32px;
+    padding: 6px 9px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--b64c-text);
+    font: 13px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+#base64-composer-float .b64c-undo:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+#base64-composer-float .b64c-undo:disabled {
+    opacity: 0.42;
+    cursor: default;
+}
+
+#base64-composer-float .b64c-toast {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 7px);
+    max-width: min(210px, calc(100vw - 24px));
+    padding: 5px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    border-radius: 7px;
+    background: rgba(20, 20, 24, 0.9);
+    color: rgba(255, 255, 255, 0.94);
+    font: 12px/1.3 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(3px);
+    transition: opacity 120ms ease, transform 120ms ease;
+}
+
+#base64-composer-float .b64c-menu:not([hidden]) + .b64c-toast {
+    display: none;
+}
+
+#base64-composer-float .b64c-toast-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #base64-composer-float .b64c-toast {
+        transition: none;
+    }
+}

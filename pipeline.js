@@ -1,4 +1,5 @@
 import { base64ToUtf8, utf8ToBase64 } from './core.js';
+import { splitProtectedSegments } from './protection.js';
 
 export const CHAT_COMPLETION_ENDPOINT = '/api/backends/chat-completions/generate';
 export const MESSAGE_TRANSPORT_MARKER = 'base64_composer_transport_v1';
@@ -8,6 +9,7 @@ export const DEFAULT_PIPELINE_SETTINGS = Object.freeze({
     outgoingAdapterEnabled: false,
     responseNormalizerEnabled: false,
     outgoingMode: 'chunked',
+    protectSpecifiedCode: false,
 });
 
 export function normalizePipelineSettings(settings = {}) {
@@ -15,6 +17,7 @@ export function normalizePipelineSettings(settings = {}) {
         outgoingAdapterEnabled: settings.outgoingAdapterEnabled === true,
         responseNormalizerEnabled: settings.responseNormalizerEnabled === true,
         outgoingMode: settings.outgoingMode === 'whole' ? 'whole' : 'chunked',
+        protectSpecifiedCode: settings.protectSpecifiedCode === true,
     };
 }
 
@@ -63,8 +66,108 @@ export function decodeScatterTransport(transport) {
     }).join('');
 }
 
+const PROTECTED_MAGIC = '[BASE64-PROTECTED/1]\n';
+const PROTECTED_SUFFIX = '\n[/BASE64-PROTECTED/1]';
+
+function createProtectedPrefix(marker) {
+    return [
+        '[BASE64-PROTECTED/1]',
+        'encoding: utf-8/base64',
+        `marker: ${marker}`,
+        'reconstruct: decode each inline marker segment in ascending index and keep all other text exactly',
+        'content:',
+        '',
+    ].join('\n');
+}
+
+export function decodeProtectedTransport(transport) {
+    if (!transport.startsWith(PROTECTED_MAGIC) || !transport.endsWith(PROTECTED_SUFFIX)) {
+        throw new Error('Invalid protected Base64 transport.');
+    }
+    const contentSeparator = '\ncontent:\n';
+    const contentOffset = transport.indexOf(contentSeparator, PROTECTED_MAGIC.length);
+    const header = contentOffset < 0 ? '' : transport.slice(0, contentOffset);
+    const markerMatch = header.match(/\nmarker: ([A-Z0-9_]+)\n/);
+    if (!markerMatch) {
+        throw new Error('Invalid protected Base64 marker.');
+    }
+    const content = transport.slice(contentOffset + contentSeparator.length, -PROTECTED_SUFFIX.length);
+    const marker = markerMatch[1];
+    const tokenPattern = new RegExp(`\\[\\[${marker}:(\\d+)\\/(\\d+):([A-Za-z0-9+/]*={0,2})\\]\\]`, 'g');
+    let expectedIndex = 1;
+    let expectedTotal = null;
+    const decoded = content.replace(tokenPattern, (_token, indexText, totalText, data) => {
+        const index = Number(indexText);
+        const total = Number(totalText);
+        if (expectedTotal === null) {
+            expectedTotal = total;
+        }
+        if (index !== expectedIndex || total !== expectedTotal) {
+            throw new Error('Invalid or unordered protected Base64 segment.');
+        }
+        expectedIndex += 1;
+        return base64ToUtf8(data);
+    });
+    if (expectedTotal === null || expectedIndex - 1 !== expectedTotal) {
+        throw new Error('Incomplete protected Base64 transport.');
+    }
+    return decoded;
+}
+
+export function buildProtectedTransport(text, requestedChunkSize = 8) {
+    const parsedSize = Number.parseInt(requestedChunkSize, 10);
+    const chunkSize = Number.isFinite(parsedSize) ? Math.min(1000, Math.max(1, parsedSize)) : 8;
+    const segments = splitProtectedSegments(text);
+    const parts = [];
+
+    for (const segment of segments) {
+        if (segment.kind === 'preserved') {
+            parts.push(segment);
+            continue;
+        }
+        const codePoints = Array.from(segment.text);
+        for (let offset = 0; offset < codePoints.length; offset += chunkSize) {
+            const source = codePoints.slice(offset, offset + chunkSize).join('');
+            parts.push({ kind: 'encoded', data: utf8ToBase64(source) });
+        }
+    }
+
+    const encodedParts = parts.filter((part) => part.kind === 'encoded');
+    if (encodedParts.length === 0) {
+        return text;
+    }
+    let marker = 'B64C';
+    let markerOffset = 1;
+    while (text.includes(`[[${marker}:`)) {
+        marker = `B64C_${markerOffset}`;
+        markerOffset += 1;
+    }
+    let index = 0;
+    const content = parts.map((part) => {
+        if (part.kind === 'preserved') {
+            return part.text;
+        }
+        index += 1;
+        return `[[${marker}:${index}/${encodedParts.length}:${part.data}]]`;
+    }).join('');
+    const output = `${createProtectedPrefix(marker)}${content}${PROTECTED_SUFFIX}`;
+    if (decodeProtectedTransport(output) !== text) {
+        throw new Error('Protected Base64 round-trip failed.');
+    }
+    return output;
+}
+
+export function decodeRequestTransport(transport) {
+    return transport.startsWith(PROTECTED_MAGIC)
+        ? decodeProtectedTransport(transport)
+        : decodeScatterTransport(transport);
+}
+
 /** The single conversion entry used by both preview and request preparation. */
 export function buildRequestTransport(text, settings = {}) {
+    if (settings.protectSpecifiedCode === true) {
+        return buildProtectedTransport(text, settings.chunkSize);
+    }
     const mode = settings.outgoingMode === 'whole' ? 'whole' : 'chunked';
     const chunkSize = mode === 'whole' ? Math.max(1, Array.from(text).length) : settings.chunkSize;
     return buildScatterTransport(text, chunkSize);
@@ -135,7 +238,10 @@ export function createTemporaryMessageAdapter({
 
             const original = message.mes;
             const prepared = buildRequestTransport(original, getTransportSettings());
-            if (decodeScatterTransport(prepared) !== original) {
+            if (prepared === original) {
+                continue;
+            }
+            if (decodeRequestTransport(prepared) !== original) {
                 return false;
             }
 

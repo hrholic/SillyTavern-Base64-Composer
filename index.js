@@ -13,6 +13,7 @@ import {
     MESSAGE_TRANSPORT_APPLIED,
     normalizePipelineSettings,
 } from './pipeline.js';
+import { copyText } from './clipboard.js';
 
 const ROOT_ID = 'base64-composer-float';
 const STORAGE_KEY = 'base64-composer-position-v1';
@@ -105,12 +106,16 @@ function createFloatingControl() {
                 <input class="b64c-response" type="checkbox">
                 <span>响应正文提取</span>
             </label>
+            <label class="b64c-check">
+                <input class="b64c-protect" type="checkbox">
+                <span>保护指定代码</span>
+            </label>
             <details class="b64c-pipeline-hint">
                 <summary>说明</summary>
-                <div>发送时编码仅在请求装配时临时生效；响应正文提取只适配工具参数正文，不做 Base64 解码。</div>
+                <div>发送时编码仅在请求装配时临时生效。保护指定代码会保留注释、指令标记、代码块和已知数据块，正文仍在原位置编码。</div>
             </details>
             <details class="b64c-preview-wrap">
-                <summary>实际发送预览</summary>
+                <summary><span>实际发送预览</span><button class="b64c-copy" type="button">复制</button></summary>
                 <pre class="b64c-preview"></pre>
             </details>
         </div>
@@ -132,7 +137,9 @@ function mount() {
     const chunkSizeInput = root.querySelector('.b64c-chunk-size');
     const outgoingInput = root.querySelector('.b64c-outgoing');
     const responseInput = root.querySelector('.b64c-response');
+    const protectInput = root.querySelector('.b64c-protect');
     const preview = root.querySelector('.b64c-preview');
+    const copyButton = root.querySelector('.b64c-copy');
     const themeButton = root.querySelector('.b64c-theme');
     let settings = loadSettings();
     const targetResolver = createTextareaTargetResolver(document, {
@@ -157,6 +164,7 @@ function mount() {
         })
         : null;
     let toastTimer = null;
+    let copyTimer = null;
     let badgeSyncTimer = null;
     let dragOrigin = null;
 
@@ -201,6 +209,7 @@ function mount() {
         chunkSizeInput.value = String(settings.chunkSize);
         outgoingInput.checked = settings.outgoingAdapterEnabled;
         responseInput.checked = settings.responseNormalizerEnabled;
+        protectInput.checked = settings.protectSpecifiedCode;
         chunkField.hidden = false;
         root.classList.toggle('b64c-send-enabled', settings.outgoingAdapterEnabled);
         root.dataset.theme = settings.theme;
@@ -242,6 +251,7 @@ function mount() {
                 outgoingAdapterEnabled: outgoingInput.checked,
                 responseNormalizerEnabled: responseInput.checked,
                 outgoingMode: 'chunked',
+                protectSpecifiedCode: protectInput.checked,
             }),
             theme: settings.theme,
         };
@@ -263,6 +273,17 @@ function mount() {
         settings = { ...settings, theme: settings.theme === 'light' ? 'dark' : 'light' };
         saveSettings(settings);
         syncSettingsUI();
+    }
+
+    async function copyPreview(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        clearTimeout(copyTimer);
+        const copied = await copyText(preview.textContent ?? '');
+        copyButton.textContent = copied ? '已复制' : '复制失败';
+        copyTimer = setTimeout(() => {
+            copyButton.textContent = '复制';
+        }, 1200);
     }
 
     function applyPosition(position, persist = false) {
@@ -406,9 +427,11 @@ function mount() {
     action.addEventListener('pointercancel', onPointerCancel);
     action.addEventListener('contextmenu', onContextMenu);
     themeButton.addEventListener('click', toggleTheme);
+    copyButton.addEventListener('click', copyPreview);
     chunkSizeInput.addEventListener('change', updateSettings);
     outgoingInput.addEventListener('change', updateSettings);
     responseInput.addEventListener('change', updateSettings);
+    protectInput.addEventListener('change', updateSettings);
     document.addEventListener('focusin', onDocumentFocusIn, true);
     document.addEventListener('pointerdown', onOutsidePointerDown, true);
     window.addEventListener('resize', keepInViewport);
@@ -420,6 +443,7 @@ function mount() {
 
     cleanupCurrentMount = () => {
         clearTimeout(toastTimer);
+        clearTimeout(copyTimer);
         clearTimeout(badgeSyncTimer);
         interaction.destroy();
         action.removeEventListener('pointerdown', onPointerDown);
@@ -428,9 +452,11 @@ function mount() {
         action.removeEventListener('pointercancel', onPointerCancel);
         action.removeEventListener('contextmenu', onContextMenu);
         themeButton.removeEventListener('click', toggleTheme);
+        copyButton.removeEventListener('click', copyPreview);
         chunkSizeInput.removeEventListener('change', updateSettings);
         outgoingInput.removeEventListener('change', updateSettings);
         responseInput.removeEventListener('change', updateSettings);
+        protectInput.removeEventListener('change', updateSettings);
         document.removeEventListener('focusin', onDocumentFocusIn, true);
         document.removeEventListener('pointerdown', onOutsidePointerDown, true);
         window.removeEventListener('resize', keepInViewport);

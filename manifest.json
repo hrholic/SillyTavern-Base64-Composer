@@ -1,10 +1,10 @@
 {
-    "display_name": "B64",
+    "display_name": "base 64发送修改编码",
     "loading_order": 100,
     "js": "index.js",
     "css": "style.css",
     "author": "SillyTavern-Base64-Composer contributors",
-    "version": "1.5.2",
+    "version": "1.6.0",
     "homePage": "https://github.com/hrholic/SillyTavern-Base64-Composer",
     "auto_update": false
 }

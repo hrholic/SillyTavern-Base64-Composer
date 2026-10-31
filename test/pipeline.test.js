@@ -4,10 +4,13 @@ import test from 'node:test';
 
 import {
     buildScatterTransport,
+    buildProtectedTransport,
     buildRequestTransport,
     createScopedFetchNormalizer,
     createTemporaryMessageAdapter,
     decodeScatterTransport,
+    decodeProtectedTransport,
+    decodeRequestTransport,
     MESSAGE_TRANSPORT_APPLIED,
     MESSAGE_TRANSPORT_MARKER,
     normalizeChatCompletionResponse,
@@ -38,6 +41,124 @@ test('request preview and preparation share whole/chunked transport behavior', (
     assert.equal(decodeScatterTransport(chunked), original);
     assert.equal(whole.split('\n').filter((line) => /^\d+\/\d+:/.test(line)).length, 1);
     assert.ok(chunked.split('\n').filter((line) => /^\d+\/\d+:/.test(line)).length > 1);
+});
+
+test('protection keeps nested data blocks byte-for-byte and encodes surrounding prose', () => {
+    const original = '开头🙂<recall id="r1"><recall>数据库原文</recall><JSONPatch>[{"op":"test"}]</JSONPatch></recall>结尾';
+    const transport = buildProtectedTransport(original, 3);
+    const preserved = '<recall id="r1"><recall>数据库原文</recall><JSONPatch>[{"op":"test"}]</JSONPatch></recall>';
+    assert.match(transport, /^\[BASE64-PROTECTED\/1\]/);
+    assert.ok(transport.includes(preserved));
+    assert.ok(!transport.includes('开头🙂'));
+    assert.ok(!transport.includes('结尾'));
+    assert.equal(decodeProtectedTransport(transport), original);
+});
+
+test('protection preserves tag order, comments and Request template tokens while encoding prose in place', () => {
+    const original = [
+        '你好',
+        '<!-- Request: keep exactly -->',
+        '<plot role="main">普通正文<em>强调</em></plot>',
+        '<本轮用户输入>保留标签并编码正文</本轮用户输入>',
+        '<Request: User轻触Character(s)的手>',
+        '尾声',
+    ].join('\n');
+    const transport = buildRequestTransport(original, {
+        outgoingMode: 'chunked',
+        chunkSize: 4,
+        protectSpecifiedCode: true,
+    });
+    assert.ok(transport.includes('<!-- Request: keep exactly -->'));
+    assert.ok(transport.includes('<plot role="main">'));
+    assert.ok(transport.includes('<em>'));
+    assert.ok(transport.includes('</em></plot>'));
+    assert.ok(transport.includes('<本轮用户输入>'));
+    assert.ok(transport.includes('</本轮用户输入>'));
+    assert.ok(!transport.includes('保留标签并编码正文'));
+    assert.ok(transport.includes('<Request: User'));
+    assert.ok(transport.includes('Character(s)'));
+    assert.ok(!transport.includes('普通正文'));
+    assert.ok(!transport.includes('轻触'));
+    assert.ok(transport.indexOf('<plot role="main">') < transport.indexOf('</plot>'));
+    assert.equal(decodeRequestTransport(transport), original);
+});
+
+test('protection preserves directives, code fences and conservative unclosed structures', () => {
+    const original = [
+        '前言🙂',
+        '[SYSTEM_DIRECTIVE: {"items":[1, 2]}] keep this line',
+        '```json',
+        '{"machine":"原样"}',
+        '```',
+        '`inline 原样`',
+        '<unknown attr="x">未闭合结构原样',
+    ].join('\n');
+    const transport = buildProtectedTransport(original, 2);
+    assert.ok(transport.includes('[SYSTEM_DIRECTIVE: {"items":[1, 2]}] keep this line'));
+    assert.ok(transport.includes('```json\n{"machine":"原样"}\n```'));
+    assert.ok(transport.includes('`inline 原样`'));
+    assert.ok(transport.includes('<unknown attr="x">未闭合结构原样'));
+    assert.ok(!transport.includes('前言🙂'));
+    assert.equal(decodeProtectedTransport(transport), original);
+});
+
+test('protected transport chooses a collision-free deterministic inline marker', () => {
+    const original = '正文<recall>[[B64C:1/1:QQ==]]</recall>尾部';
+    const transport = buildProtectedTransport(original, 2);
+    assert.match(transport, /\nmarker: B64C_1\n/);
+    assert.ok(transport.includes('<recall>[[B64C:1/1:QQ==]]</recall>'));
+    assert.equal(decodeProtectedTransport(transport), original);
+});
+
+test('protection is opt-in and disabled output remains byte-identical to the old scatter transport', () => {
+    const original = '正文<!-- Request: -->后文';
+    const previous = buildScatterTransport(original, 3);
+    const disabled = buildRequestTransport(original, {
+        outgoingMode: 'chunked',
+        chunkSize: 3,
+        protectSpecifiedCode: false,
+    });
+    const enabled = buildRequestTransport(original, {
+        outgoingMode: 'chunked',
+        chunkSize: 3,
+        protectSpecifiedCode: true,
+    });
+    assert.equal(disabled, previous);
+    assert.notEqual(enabled, previous);
+    assert.ok(enabled.includes('<!-- Request: -->'));
+    assert.ok(!enabled.includes('后文'));
+    assert.equal(decodeRequestTransport(enabled), original);
+});
+
+test('protected request uses the same adapter path, restores original and keeps applied metadata behavior', () => {
+    const eventSource = new EventEmitter();
+    const original = '你好\n<Request: User轻触Character(s)的手>';
+    const message = { is_user: true, mes: original };
+    const chat = [];
+    let preview = '';
+    const adapter = createTemporaryMessageAdapter({
+        eventSource,
+        eventTypes,
+        getChat: () => chat,
+        getSettings: () => ({ outgoingAdapterEnabled: true }),
+        getTransportSettings: () => ({
+            outgoingMode: 'chunked',
+            chunkSize: 3,
+            protectSpecifiedCode: true,
+        }),
+        onPreview: (value) => { preview = value; },
+    });
+
+    eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    chat.push(message);
+    eventSource.emit(eventTypes.USER_MESSAGE_RENDERED, 0);
+    assert.equal(message.mes, preview);
+    assert.equal(decodeRequestTransport(preview), original);
+    assert.equal(message.extra[MESSAGE_TRANSPORT_APPLIED], undefined);
+    eventSource.emit(eventTypes.GENERATE_AFTER_DATA, {});
+    assert.equal(message.mes, original);
+    assert.equal(message.extra[MESSAGE_TRANSPORT_APPLIED], true);
+    adapter.destroy();
 });
 
 test('outgoing adapter waits for SillyTavern to render the new user message before swapping it', () => {

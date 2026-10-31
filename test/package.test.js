@@ -9,7 +9,7 @@ test('manifest declares the supported frontend files and disables unpublished au
     assert.equal(manifest.js, 'index.js');
     assert.equal(manifest.css, 'style.css');
     assert.equal(manifest.auto_update, false);
-    assert.equal(manifest.display_name, 'B64');
+    assert.equal(manifest.display_name, 'base 64发送修改编码');
     assert.equal(typeof manifest.author, 'string');
 });
 
@@ -18,6 +18,7 @@ test('UI keeps the requested 1px border and touch-safe drag behavior', async () 
     assert.match(css, /border:\s*1px solid var\(--b64c-border\)/);
     assert.match(css, /touch-action:\s*none/);
     assert.match(css, /--b64c-bg:\s*rgba\([^;]+,\s*0\.5\)/);
+    assert.match(css, /#chat \.b64c-message-badge\s*\{[^}]*border:\s*0;[^}]*background:\s*none;[^}]*box-shadow:\s*none;[^}]*opacity:\s*0\.58;/s);
     assert.match(css, /\[data-theme="light"\]/);
     assert.match(css, /\.b64c-send-enabled \.b64c-action\s*\{\s*border-color:\s*var\(--b64c-border-active\)/);
     assert.doesNotMatch(css, /77d995|119,\s*217,\s*149/);
@@ -33,9 +34,12 @@ test('entrypoint keeps composer support and does not trigger send or generation 
     assert.doesNotMatch(source, /b64c-manual|b64c-undo|b64c-preserve/);
     assert.doesNotMatch(source, /b64c-send-status/);
     assert.match(source, /class="b64c-theme"/);
+    assert.match(source, /class="b64c-protect"/);
+    assert.match(source, /class="b64c-copy"/);
     assert.match(source, /<details class="b64c-pipeline-hint">/);
     assert.match(source, /mode: 'structured'/);
     assert.match(source, /outgoingMode: 'chunked'/);
+    assert.match(source, /protectSpecifiedCode: protectInput\.checked/);
     assert.match(source, /theme: stored\.theme === 'light'/);
 });
 

@@ -29,7 +29,7 @@ const eventTypes = {
 test('scatter transport preserves Unicode and every whitespace character exactly', () => {
     const original = '  中文🙂\n\r\n\t尾部  \n';
     const transport = buildScatterTransport(original, 3);
-    assert.match(transport, /^\[BASE64-SCATTER\/1\]/);
+    assert.match(transport, /^\[B64\/1 utf8; decode 1\.\.\d+, join\]/);
     assert.equal(decodeScatterTransport(transport), original);
 });
 
@@ -47,7 +47,7 @@ test('protection keeps nested data blocks byte-for-byte and encodes surrounding 
     const original = '开头🙂<recall id="r1"><recall>数据库原文</recall><JSONPatch>[{"op":"test"}]</JSONPatch></recall>结尾';
     const transport = buildProtectedTransport(original, 3);
     const preserved = '<recall id="r1"><recall>数据库原文</recall><JSONPatch>[{"op":"test"}]</JSONPatch></recall>';
-    assert.match(transport, /^\[BASE64-PROTECTED\/1\]/);
+    assert.match(transport, /^\[B64P\/1 utf8; decode \[\[B:i\/N:data\]\] in place\]/);
     assert.ok(transport.includes(preserved));
     assert.ok(!transport.includes('开头🙂'));
     assert.ok(!transport.includes('结尾'));
@@ -103,11 +103,30 @@ test('protection preserves directives, code fences and conservative unclosed str
 });
 
 test('protected transport chooses a collision-free deterministic inline marker', () => {
-    const original = '正文<recall>[[B64C:1/1:QQ==]]</recall>尾部';
+    const original = '正文<recall>[[B:1/1:QQ==]]</recall>尾部';
     const transport = buildProtectedTransport(original, 2);
-    assert.match(transport, /\nmarker: B64C_1\n/);
-    assert.ok(transport.includes('<recall>[[B64C:1/1:QQ==]]</recall>'));
+    assert.match(transport, /^\[B64P\/1 utf8; decode \[\[B_1:i\/N:data\]\] in place\]/);
+    assert.ok(transport.includes('<recall>[[B:1/1:QQ==]]</recall>'));
     assert.equal(decodeProtectedTransport(transport), original);
+});
+
+test('compact transports keep whitespace-only protected gaps literal and avoid verbose metadata', () => {
+    const original = '正文\n<!-- Request: -->\n<plot>后文</plot>';
+    const scatter = buildRequestTransport(original, {
+        outgoingMode: 'chunked',
+        chunkSize: 8,
+        protectSpecifiedCode: false,
+    });
+    const protectedText = buildRequestTransport(original, {
+        outgoingMode: 'chunked',
+        chunkSize: 8,
+        protectSpecifiedCode: true,
+    });
+    assert.doesNotMatch(scatter, /encoding:|reconstruct:|BASE64-SCATTER/);
+    assert.doesNotMatch(protectedText, /encoding:|reconstruct:|BASE64-PROTECTED|\[\[B:\d+\/\d+:Cg==\]\]/);
+    assert.ok(protectedText.includes('<!-- Request: -->\n<plot>'));
+    assert.equal(decodeRequestTransport(scatter), original);
+    assert.equal(decodeRequestTransport(protectedText), original);
 });
 
 test('protection is opt-in and disabled output remains byte-identical to the old scatter transport', () => {

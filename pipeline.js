@@ -37,24 +37,23 @@ export function buildScatterTransport(text, requestedChunkSize = 8) {
 
     const lines = chunks.map((data, offset) => `${offset + 1}/${chunks.length}:${data}`);
     return [
-        '[BASE64-SCATTER/1]',
-        'encoding: utf-8/base64',
-        'reconstruct: decode data chunks in ascending index and concatenate exactly without separators',
+        `[B64/1 utf8; decode 1..${chunks.length}, join]`,
         ...lines,
-        '[/BASE64-SCATTER/1]',
+        '[/B64]',
     ].join('\n');
 }
 
 export function decodeScatterTransport(transport) {
     const lines = transport.split('\n');
-    if (lines[0] !== '[BASE64-SCATTER/1]'
-        || lines[1] !== 'encoding: utf-8/base64'
-        || lines[2] !== 'reconstruct: decode data chunks in ascending index and concatenate exactly without separators'
-        || lines.at(-1) !== '[/BASE64-SCATTER/1]') {
+    const headerMatch = lines[0]?.match(/^\[B64\/1 utf8; decode 1\.\.(\d+), join\]$/);
+    if (!headerMatch || lines.at(-1) !== '[/B64]') {
         throw new Error('Invalid Base64 scatter transport.');
     }
 
-    const chunkLines = lines.slice(3, -1);
+    const chunkLines = lines.slice(1, -1);
+    if (Number(headerMatch[1]) !== chunkLines.length) {
+        throw new Error('Incomplete Base64 scatter transport.');
+    }
     return chunkLines.map((line, offset) => {
         const match = line.match(/^(\d+)\/(\d+):([A-Za-z0-9+/]*={0,2})$/);
         if (!match
@@ -66,32 +65,24 @@ export function decodeScatterTransport(transport) {
     }).join('');
 }
 
-const PROTECTED_MAGIC = '[BASE64-PROTECTED/1]\n';
-const PROTECTED_SUFFIX = '\n[/BASE64-PROTECTED/1]';
+const PROTECTED_MAGIC = '[B64P/1 utf8; decode [[';
+const PROTECTED_SUFFIX = '\n[/B64P]';
 
 function createProtectedPrefix(marker) {
-    return [
-        '[BASE64-PROTECTED/1]',
-        'encoding: utf-8/base64',
-        `marker: ${marker}`,
-        'reconstruct: decode each inline marker segment in ascending index and keep all other text exactly',
-        'content:',
-        '',
-    ].join('\n');
+    return `[B64P/1 utf8; decode [[${marker}:i/N:data]] in place]\n`;
 }
 
 export function decodeProtectedTransport(transport) {
     if (!transport.startsWith(PROTECTED_MAGIC) || !transport.endsWith(PROTECTED_SUFFIX)) {
         throw new Error('Invalid protected Base64 transport.');
     }
-    const contentSeparator = '\ncontent:\n';
-    const contentOffset = transport.indexOf(contentSeparator, PROTECTED_MAGIC.length);
-    const header = contentOffset < 0 ? '' : transport.slice(0, contentOffset);
-    const markerMatch = header.match(/\nmarker: ([A-Z0-9_]+)\n/);
+    const firstLineEnd = transport.indexOf('\n');
+    const header = firstLineEnd < 0 ? '' : transport.slice(0, firstLineEnd);
+    const markerMatch = header.match(/^\[B64P\/1 utf8; decode \[\[([A-Z0-9_]+):i\/N:data\]\] in place\]$/);
     if (!markerMatch) {
         throw new Error('Invalid protected Base64 marker.');
     }
-    const content = transport.slice(contentOffset + contentSeparator.length, -PROTECTED_SUFFIX.length);
+    const content = transport.slice(firstLineEnd + 1, -PROTECTED_SUFFIX.length);
     const marker = markerMatch[1];
     const tokenPattern = new RegExp(`\\[\\[${marker}:(\\d+)\\/(\\d+):([A-Za-z0-9+/]*={0,2})\\]\\]`, 'g');
     let expectedIndex = 1;
@@ -125,6 +116,10 @@ export function buildProtectedTransport(text, requestedChunkSize = 8) {
             parts.push(segment);
             continue;
         }
+        if (/^\s+$/.test(segment.text)) {
+            parts.push({ kind: 'preserved', text: segment.text });
+            continue;
+        }
         const codePoints = Array.from(segment.text);
         for (let offset = 0; offset < codePoints.length; offset += chunkSize) {
             const source = codePoints.slice(offset, offset + chunkSize).join('');
@@ -136,10 +131,10 @@ export function buildProtectedTransport(text, requestedChunkSize = 8) {
     if (encodedParts.length === 0) {
         return text;
     }
-    let marker = 'B64C';
+    let marker = 'B';
     let markerOffset = 1;
     while (text.includes(`[[${marker}:`)) {
-        marker = `B64C_${markerOffset}`;
+        marker = `B_${markerOffset}`;
         markerOffset += 1;
     }
     let index = 0;

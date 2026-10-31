@@ -109,22 +109,15 @@ function createFloatingControl() {
             </label>
             <label class="b64c-check">
                 <input class="b64c-protect-request" type="checkbox">
-                <span>指令改请求</span>
+                <span>请求</span>
             </label>
             <label class="b64c-check">
                 <input class="b64c-protect-database" type="checkbox">
-                <span>数据库指令保护</span>
+                <span>数据库保护</span>
             </label>
             <details class="b64c-pipeline-hint">
                 <summary>说明</summary>
-                <ul>
-                    <li>每块字符：设置每个 Base64 分块包含的字符数。</li>
-                    <li>发送时编码：仅在请求装配时临时编码，输入框和历史保留原文。</li>
-                    <li>响应正文提取：从支持的工具参数响应中提取正文，不是 Base64 解码。</li>
-                    <li>指令改请求：保留注释、指令标记、代码块和标签结构。</li>
-                    <li>数据库指令保护：保留 data、MVU、UpdateVariable 等数据块。</li>
-                    <li>两项保护独立生效，普通正文仍在原位置编码。</li>
-                </ul>
+                <div>发送时编码仅在请求装配时临时生效。“请求”保留注释（含 &lt;!-- Request: --&gt;）、指令标记、代码块和标签结构；“数据库保护”保留 data、MVU、UpdateVariable 等数据块。两项独立生效，普通正文仍编码。</div>
             </details>
             <details class="b64c-preview-wrap">
                 <summary><span>实际发送预览</span><button class="b64c-copy" type="button">复制</button></summary>

@@ -42,12 +42,6 @@ test('entrypoint keeps composer support and does not trigger send or generation 
     assert.match(source, /class="b64c-protect-request"/);
     assert.match(source, /class="b64c-copy"/);
     assert.match(source, /<details class="b64c-pipeline-hint">/);
-    assert.match(source, /<li>发送时编码：/);
-    assert.match(source, /<li>响应正文提取：/);
-    assert.match(source, /<span>指令改请求<\/span>/);
-    assert.match(source, /<span>数据库指令保护<\/span>/);
-    assert.match(source, /<li>指令改请求：/);
-    assert.match(source, /<li>数据库指令保护：/);
     assert.match(source, /mode: 'structured'/);
     assert.match(source, /outgoingMode: 'chunked'/);
     assert.match(source, /protectRequest: requestInput\.checked/);

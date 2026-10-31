@@ -11,8 +11,10 @@ import {
     decodeScatterTransport,
     decodeProtectedTransport,
     decodeRequestTransport,
+    inspectMessageTransportSnapshot,
     MESSAGE_TRANSPORT_APPLIED,
     MESSAGE_TRANSPORT_MARKER,
+    MESSAGE_TRANSPORT_SNAPSHOT,
     normalizeChatCompletionResponse,
     normalizeCompletionObject,
 } from '../pipeline.js';
@@ -177,6 +179,100 @@ test('protected request uses the same adapter path, restores original and keeps 
     eventSource.emit(eventTypes.GENERATE_AFTER_DATA, {});
     assert.equal(message.mes, original);
     assert.equal(message.extra[MESSAGE_TRANSPORT_APPLIED], true);
+    adapter.destroy();
+});
+
+test('request-ready stores the exact prepared fragment and later settings changes do not rewrite it', () => {
+    const eventSource = new EventEmitter();
+    const original = '快照正文🙂';
+    const message = { is_user: true, mes: original };
+    const chat = [];
+    const settings = { outgoingMode: 'chunked', chunkSize: 2, protectSpecifiedCode: false };
+    let prepared = '';
+    let stored = null;
+    const adapter = createTemporaryMessageAdapter({
+        eventSource,
+        eventTypes,
+        getChat: () => chat,
+        getSettings: () => ({ outgoingAdapterEnabled: true }),
+        getTransportSettings: () => settings,
+        getTimestamp: () => '2026-10-31T12:00:00.000Z',
+        onPreview: (value) => { prepared = value; },
+        onSnapshotStored: (records) => { stored = records; },
+    });
+
+    eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    chat.push(message);
+    eventSource.emit(eventTypes.USER_MESSAGE_RENDERED, 0);
+    eventSource.emit(eventTypes.GENERATE_AFTER_DATA, {});
+
+    const snapshot = message.extra[MESSAGE_TRANSPORT_SNAPSHOT];
+    assert.equal(snapshot.payload, prepared);
+    assert.equal(snapshot.capturedAt, '2026-10-31T12:00:00.000Z');
+    assert.equal(snapshot.swipeId, null);
+    assert.equal(message.mes, original);
+    assert.equal(stored[0].snapshot, snapshot);
+    assert.equal(inspectMessageTransportSnapshot(message).status, 'current');
+
+    settings.chunkSize = 100;
+    settings.protectSpecifiedCode = true;
+    assert.equal(message.extra[MESSAGE_TRANSPORT_SNAPSHOT].payload, prepared);
+    adapter.destroy();
+});
+
+test('snapshot metadata stays isolated by message and swipe and never replaces message text', () => {
+    const eventSource = new EventEmitter();
+    const first = {
+        is_user: true,
+        mes: '第一条',
+        swipe_id: 0,
+        swipes: ['第一条'],
+        swipe_info: [{ extra: {} }],
+        extra: { [MESSAGE_TRANSPORT_MARKER]: true },
+    };
+    const second = {
+        is_user: true,
+        mes: '第二条',
+        swipe_id: 1,
+        swipes: ['旧滑页', '第二条'],
+        swipe_info: [{ extra: {} }, { extra: {} }],
+        extra: { [MESSAGE_TRANSPORT_MARKER]: true },
+    };
+    const adapter = createTemporaryMessageAdapter({
+        eventSource,
+        eventTypes,
+        getChat: () => [first, second],
+        getSettings: () => ({ outgoingAdapterEnabled: true }),
+        getTransportSettings: () => ({ outgoingMode: 'chunked', chunkSize: 2 }),
+        getTimestamp: () => '2026-10-31T13:00:00.000Z',
+    });
+
+    eventSource.emit(eventTypes.GENERATION_STARTED, 'regenerate', {}, false);
+    const firstPrepared = first.mes;
+    const secondPrepared = second.mes;
+    eventSource.emit(eventTypes.GENERATE_AFTER_DATA, {});
+
+    assert.equal(first.mes, '第一条');
+    assert.equal(second.mes, '第二条');
+    assert.equal(first.extra[MESSAGE_TRANSPORT_SNAPSHOT].payload, firstPrepared);
+    assert.equal(second.extra[MESSAGE_TRANSPORT_SNAPSHOT].payload, secondPrepared);
+    assert.equal(first.extra[MESSAGE_TRANSPORT_SNAPSHOT].swipeId, 0);
+    assert.equal(second.extra[MESSAGE_TRANSPORT_SNAPSHOT].swipeId, 1);
+    assert.equal(first.swipe_info[0].extra[MESSAGE_TRANSPORT_SNAPSHOT], first.extra[MESSAGE_TRANSPORT_SNAPSHOT]);
+    assert.equal(second.swipe_info[1].extra[MESSAGE_TRANSPORT_SNAPSHOT], second.extra[MESSAGE_TRANSPORT_SNAPSHOT]);
+    assert.equal(inspectMessageTransportSnapshot(first).status, 'current');
+    assert.equal(inspectMessageTransportSnapshot(second).status, 'current');
+
+    second.mes = '编辑后的第二条';
+    assert.equal(inspectMessageTransportSnapshot(second).status, 'edited');
+    second.swipe_id = 0;
+    second.mes = '旧滑页';
+    assert.equal(inspectMessageTransportSnapshot(second).status, 'missing');
+    second.swipe_id = 1;
+    second.mes = '第二条';
+    assert.equal(inspectMessageTransportSnapshot(second).status, 'current');
+    assert.equal(inspectMessageTransportSnapshot({ is_user: true, mes: '旧消息', extra: { [MESSAGE_TRANSPORT_APPLIED]: true } }).status, 'missing');
+    assert.equal(JSON.parse(JSON.stringify(first)).mes, '第一条');
     adapter.destroy();
 });
 

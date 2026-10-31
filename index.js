@@ -10,6 +10,7 @@ import {
     createScopedFetchNormalizer,
     createTemporaryMessageAdapter,
     DEFAULT_PIPELINE_SETTINGS,
+    inspectMessageTransportSnapshot,
     MESSAGE_TRANSPORT_APPLIED,
     normalizePipelineSettings,
 } from './pipeline.js';
@@ -159,6 +160,14 @@ function mount() {
                 root.classList.toggle('b64c-request-active', active);
                 if (!active) {
                     scheduleBadgeSync();
+                }
+            },
+            onSnapshotStored: () => {
+                try {
+                    const saveResult = context.saveChat?.();
+                    saveResult?.catch?.((error) => console.error('[B64] Failed to save encoded snapshot.', error));
+                } catch (error) {
+                    console.error('[B64] Failed to save encoded snapshot.', error);
                 }
             },
         })
@@ -358,7 +367,8 @@ function mount() {
     }
 
     function syncMessageBadges() {
-        document.querySelectorAll('#chat .b64c-message-badge').forEach((badge) => badge.remove());
+        document.querySelectorAll('#chat .b64c-message-badge, #chat .b64c-message-snapshot')
+            .forEach((element) => element.remove());
         if (!Array.isArray(context?.chat)) {
             return;
         }
@@ -372,11 +382,61 @@ function mount() {
             if (!messageText) {
                 return;
             }
-            const badge = document.createElement('span');
+            const badge = document.createElement('button');
+            badge.type = 'button';
             badge.className = 'b64c-message-badge';
             badge.textContent = '已编码';
-            badge.title = '本条消息曾完成发送载荷编码；不代表模型已接收';
+            badge.title = '查看最近一次编码记录';
+            badge.setAttribute('aria-expanded', 'false');
+
+            const panel = document.createElement('div');
+            panel.className = 'b64c-message-snapshot';
+            panel.hidden = true;
+            const inspected = inspectMessageTransportSnapshot(message);
+            const snapshot = inspected.snapshot;
+
+            if (!snapshot) {
+                panel.textContent = '没有历史编码记录';
+            } else {
+                const toolbar = document.createElement('div');
+                toolbar.className = 'b64c-snapshot-toolbar';
+                const status = document.createElement('span');
+                const capturedDate = new Date(snapshot.capturedAt);
+                const time = Number.isNaN(capturedDate.getTime())
+                    ? snapshot.capturedAt
+                    : capturedDate.toLocaleString();
+                const statusText = {
+                    current: '最近生成',
+                    edited: '编辑前记录',
+                    different_swipe: '其他滑页记录',
+                    invalid: '记录无法校验',
+                }[inspected.status] ?? '最近生成';
+                status.textContent = `${statusText} · ${time} · 不代表已接收`;
+
+                const copy = document.createElement('button');
+                copy.type = 'button';
+                copy.className = 'b64c-snapshot-copy';
+                copy.textContent = '复制';
+                copy.addEventListener('click', async (event) => {
+                    event.stopPropagation();
+                    const copied = await copyText(snapshot.payload);
+                    copy.textContent = copied ? '已复制' : '复制失败';
+                    setTimeout(() => { copy.textContent = '复制'; }, 1200);
+                });
+
+                const content = document.createElement('pre');
+                content.className = 'b64c-snapshot-content';
+                content.textContent = snapshot.payload;
+                toolbar.append(status, copy);
+                panel.append(toolbar, content);
+            }
+
+            badge.addEventListener('click', () => {
+                panel.hidden = !panel.hidden;
+                badge.setAttribute('aria-expanded', String(!panel.hidden));
+            });
             messageText.insertAdjacentElement('afterend', badge);
+            badge.insertAdjacentElement('afterend', panel);
         });
     }
 
@@ -465,7 +525,8 @@ function mount() {
         for (const eventName of badgeEvents) {
             context.eventSource.removeListener?.(eventName, scheduleBadgeSync);
         }
-        document.querySelectorAll('#chat .b64c-message-badge').forEach((badge) => badge.remove());
+        document.querySelectorAll('#chat .b64c-message-badge, #chat .b64c-message-snapshot')
+            .forEach((element) => element.remove());
         temporaryMessageAdapter?.destroy();
         fetchNormalizer.destroy();
         root.remove();

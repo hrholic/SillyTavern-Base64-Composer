@@ -23,6 +23,7 @@ test('UI keeps the requested 1px border and touch-safe drag behavior', async () 
     assert.match(css, /\.b64c-action\s*\{[^}]*border:\s*1px solid var\(--b64c-action-border\);[^}]*background:\s*var\(--b64c-action-bg\);/s);
     assert.match(css, /#chat \.b64c-message-badge\s*\{[^}]*border:\s*0;[^}]*background:\s*none;[^}]*box-shadow:\s*none;[^}]*opacity:\s*0\.58;/s);
     assert.match(css, /#chat \.b64c-message-badge\s*\{[^}]*margin:\s*3px 0 12px 12px;/s);
+    assert.match(css, /\.b64c-message-snapshot\s*\{[^}]*max-width:\s*calc\(100% - 24px\);[^}]*max-height|\.b64c-snapshot-content\s*\{[^}]*max-height:/s);
     assert.match(css, /\[data-theme="light"\]/);
     assert.match(css, /\.b64c-send-enabled \.b64c-action\s*\{[^}]*border-color:\s*var\(--b64c-border-active\);[^}]*background:\s*var\(--b64c-action-bg-active\);/s);
     assert.doesNotMatch(css, /77d995|119,\s*217,\s*149/);
@@ -45,6 +46,10 @@ test('entrypoint keeps composer support and does not trigger send or generation 
     assert.match(source, /outgoingMode: 'chunked'/);
     assert.match(source, /protectSpecifiedCode: protectInput\.checked/);
     assert.match(source, /theme: stored\.theme === 'light'/);
+    assert.match(source, /badge\.addEventListener\('click'/);
+    assert.match(source, /panel\.hidden = !panel\.hidden/);
+    assert.match(source, /copyText\(snapshot\.payload\)/);
+    assert.match(source, /context\.saveChat\?\.\(\)/);
 });
 
 test('response adaptation is restricted to the OpenAI-compatible chat completion endpoint', async () => {

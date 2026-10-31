@@ -4,6 +4,7 @@ import { splitProtectedSegments } from './protection.js';
 export const CHAT_COMPLETION_ENDPOINT = '/api/backends/chat-completions/generate';
 export const MESSAGE_TRANSPORT_MARKER = 'base64_composer_transport_v1';
 export const MESSAGE_TRANSPORT_APPLIED = 'base64_composer_transport_applied_v1';
+export const MESSAGE_TRANSPORT_SNAPSHOT = 'base64_composer_transport_snapshot_v1';
 
 export const DEFAULT_PIPELINE_SETTINGS = Object.freeze({
     outgoingAdapterEnabled: false,
@@ -168,6 +169,38 @@ export function buildRequestTransport(text, settings = {}) {
     return buildScatterTransport(text, chunkSize);
 }
 
+export function inspectMessageTransportSnapshot(message) {
+    const currentSwipeId = Number.isInteger(message?.swipe_id) ? message.swipe_id : null;
+    const currentSwipeExtra = currentSwipeId !== null
+        && message?.swipe_info?.[currentSwipeId]?.extra
+        && typeof message.swipe_info[currentSwipeId].extra === 'object'
+        ? message.swipe_info[currentSwipeId].extra
+        : null;
+    const snapshot = (currentSwipeExtra ?? message?.extra)?.[MESSAGE_TRANSPORT_SNAPSHOT];
+    if (!snapshot
+        || snapshot.version !== 1
+        || typeof snapshot.payload !== 'string'
+        || typeof snapshot.capturedAt !== 'string'
+        || !(snapshot.swipeId === null || Number.isInteger(snapshot.swipeId))) {
+        return { status: 'missing', snapshot: null };
+    }
+
+    let decoded;
+    try {
+        decoded = decodeRequestTransport(snapshot.payload);
+    } catch {
+        return { status: 'invalid', snapshot };
+    }
+
+    if (snapshot.swipeId !== currentSwipeId) {
+        return { status: 'different_swipe', snapshot };
+    }
+    if (decoded !== message?.mes) {
+        return { status: 'edited', snapshot };
+    }
+    return { status: 'current', snapshot };
+}
+
 /**
  * A normal send made while enabled marks only that new user message. Marked
  * messages keep their transport choice when they re-enter later prompts, while
@@ -181,6 +214,8 @@ export function createTemporaryMessageAdapter({
     getTransportSettings = () => ({ outgoingMode: 'chunked', chunkSize: 8 }),
     onPreview = () => {},
     onStateChange = () => {},
+    onSnapshotStored = () => {},
+    getTimestamp = () => new Date().toISOString(),
 }) {
     let active = null;
     let pendingNormalSend = false;
@@ -196,6 +231,8 @@ export function createTemporaryMessageAdapter({
         const records = active.records;
         active = null;
 
+        const capturedAt = reason === 'request-ready' ? getTimestamp() : null;
+        const storedSnapshots = [];
         for (const record of records) {
             if (record.message.mes === record.prepared) {
                 record.message.mes = record.original;
@@ -209,9 +246,30 @@ export function createTemporaryMessageAdapter({
                     ? record.message.extra
                     : {};
                 record.message.extra[MESSAGE_TRANSPORT_APPLIED] = true;
+                const snapshot = {
+                    version: 1,
+                    payload: record.prepared,
+                    capturedAt,
+                    swipeId: record.swipeId >= 0 ? record.swipeId : null,
+                };
+                record.message.extra[MESSAGE_TRANSPORT_SNAPSHOT] = snapshot;
+                const swipeInfo = record.swipeId >= 0
+                    ? record.message.swipe_info?.[record.swipeId]
+                    : null;
+                if (swipeInfo && typeof swipeInfo === 'object') {
+                    swipeInfo.extra = swipeInfo.extra && typeof swipeInfo.extra === 'object'
+                        ? swipeInfo.extra
+                        : {};
+                    swipeInfo.extra[MESSAGE_TRANSPORT_APPLIED] = true;
+                    swipeInfo.extra[MESSAGE_TRANSPORT_SNAPSHOT] = snapshot;
+                }
+                storedSnapshots.push({ message: record.message, snapshot });
             }
         }
 
+        if (storedSnapshots.length > 0) {
+            onSnapshotStored(storedSnapshots);
+        }
         onStateChange({ active: false, reason, count: records.length });
         return true;
     }

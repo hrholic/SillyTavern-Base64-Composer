@@ -74,6 +74,7 @@ function createFloatingControl() {
                 <select class="b64c-mode">
                     <option value="whole">整段</option>
                     <option value="chunked">分块</option>
+                    <option value="structured">结构化封装</option>
                 </select>
             </label>
             <label class="b64c-field b64c-chunk-field" hidden>
@@ -84,7 +85,7 @@ function createFloatingControl() {
                 <input class="b64c-preserve" type="checkbox">
                 <span>保留技术格式</span>
             </label>
-            <div class="b64c-hint">围栏/行内代码、Markdown 链接、HTML 标签保持原样</div>
+            <div class="b64c-hint"></div>
             <button class="b64c-undo" type="button" role="menuitem" disabled>撤销转换</button>
         </div>
         <div class="b64c-toast" role="status" aria-live="polite"></div>
@@ -106,6 +107,7 @@ function mount() {
     const chunkField = root.querySelector('.b64c-chunk-field');
     const chunkSizeInput = root.querySelector('.b64c-chunk-size');
     const preserveInput = root.querySelector('.b64c-preserve');
+    const settingsHint = root.querySelector('.b64c-hint');
     let encodingSettings = loadEncodingSettings();
     const targetResolver = createTextareaTargetResolver(document, {
         composerSelector: TEXTAREA_SELECTOR,
@@ -142,7 +144,12 @@ function mount() {
             no_target: '没有可转换的输入框',
             nothing_to_encode: '没有需要编码的正文',
         };
-        const successMessage = result.settings?.mode === 'chunked' ? '已分块转换' : '已整段转换';
+        const successMessages = {
+            whole: '已整段转换',
+            chunked: '已分块转换',
+            structured: '已结构化封装',
+        };
+        const successMessage = successMessages[result.settings?.mode] ?? '已转换';
         showStatus(result.ok ? successMessage : (messages[result.code] ?? '未执行转换'));
     }
 
@@ -167,7 +174,11 @@ function mount() {
         modeSelect.value = encodingSettings.mode;
         chunkSizeInput.value = String(encodingSettings.chunkSize);
         preserveInput.checked = encodingSettings.preserveTechnical;
-        chunkField.hidden = encodingSettings.mode !== 'chunked';
+        chunkField.hidden = encodingSettings.mode === 'whole';
+        preserveInput.disabled = encodingSettings.mode === 'structured';
+        settingsHint.textContent = encodingSettings.mode === 'structured'
+            ? '结构化封装会编码完整原文，不应用格式保留'
+            : '围栏/行内代码、Markdown 链接、HTML 标签保持原样';
     }
 
     function updateSettings() {

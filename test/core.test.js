@@ -8,6 +8,7 @@ import {
     createPointerInteraction,
     createTextareaTargetResolver,
     decodeConversionParts,
+    decodeStructuredEnvelope,
     encodeText,
     utf8ToBase64,
 } from '../core.js';
@@ -95,6 +96,28 @@ test('technical preservation is conservative and round-trips exact original text
     assert.match(conversion.output, /<span>/);
     assert.match(conversion.output, /```js\nconst x = 1;\n```/);
     assert.equal(decodeConversionParts(conversion.parts), original);
+});
+
+test('structured mode emits a transparent ordered JSON envelope and restores exact Unicode text', () => {
+    const original = '你🙂好abc\n第二行';
+    const conversion = encodeText(original, { mode: 'structured', chunkSize: 2 });
+    const envelope = JSON.parse(conversion.output);
+    assert.equal(envelope.format, 'sillytavern-base64-envelope');
+    assert.equal(envelope.version, 1);
+    assert.equal(envelope.encoding, 'utf-8/base64');
+    assert.deepEqual(envelope.chunks.map((chunk) => chunk.index), [1, 2, 3, 4, 5]);
+    assert.equal(decodeStructuredEnvelope(conversion.output), original);
+});
+
+test('structured mode visibly encodes the full text and does not apply technical preservation', () => {
+    const original = '`code` [link](https://example.com) <b>text</b>';
+    const conversion = encodeText(original, {
+        mode: 'structured',
+        chunkSize: 8,
+        preserveTechnical: true,
+    });
+    assert.doesNotMatch(conversion.output, /`code`|\[link\]|<b>/);
+    assert.equal(decodeStructuredEnvelope(conversion.output), original);
 });
 
 test('empty input does nothing and emits no input event', () => {

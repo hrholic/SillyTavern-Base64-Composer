@@ -49,7 +49,7 @@ export function base64ToUtf8(base64) {
 }
 
 export function normalizeEncodingSettings(settings = {}) {
-    const mode = settings.mode === 'chunked' ? 'chunked' : 'whole';
+    const mode = ['chunked', 'structured'].includes(settings.mode) ? settings.mode : 'whole';
     const parsedSize = Number.parseInt(settings.chunkSize, 10);
     return {
         mode,
@@ -86,10 +86,27 @@ export function decodeConversionParts(parts) {
     return parts.map((part) => part.kind === 'encoded' ? base64ToUtf8(part.base64) : part.text).join('');
 }
 
+export function decodeStructuredEnvelope(jsonText) {
+    const envelope = JSON.parse(jsonText);
+    if (envelope?.format !== 'sillytavern-base64-envelope'
+        || envelope?.version !== 1
+        || envelope?.encoding !== 'utf-8/base64'
+        || !Array.isArray(envelope?.chunks)) {
+        throw new Error('Invalid Base64 envelope.');
+    }
+
+    return envelope.chunks.map((chunk, offset) => {
+        if (chunk?.index !== offset + 1 || typeof chunk?.data !== 'string') {
+            throw new Error('Invalid or unordered Base64 envelope chunk.');
+        }
+        return base64ToUtf8(chunk.data);
+    }).join('');
+}
+
 /** Create whole or independently decodable, numbered Base64 output. */
 export function encodeText(text, requestedSettings = {}) {
     const settings = normalizeEncodingSettings(requestedSettings);
-    const sourceSegments = settings.preserveTechnical
+    const sourceSegments = settings.preserveTechnical && settings.mode !== 'structured'
         ? splitTechnicalSegments(text)
         : [{ kind: 'plain', text }];
     const parts = [];
@@ -101,7 +118,7 @@ export function encodeText(text, requestedSettings = {}) {
         }
 
         const codePoints = Array.from(segment.text);
-        const size = settings.mode === 'chunked' ? settings.chunkSize : Math.max(1, codePoints.length);
+        const size = settings.mode === 'whole' ? Math.max(1, codePoints.length) : settings.chunkSize;
         for (let offset = 0; offset < codePoints.length; offset += size) {
             const chunk = codePoints.slice(offset, offset + size).join('');
             parts.push({ kind: 'encoded', base64: utf8ToBase64(chunk) });
@@ -114,7 +131,17 @@ export function encodeText(text, requestedSettings = {}) {
     }
 
     let output;
-    if (settings.mode === 'chunked') {
+    if (settings.mode === 'structured') {
+        output = JSON.stringify({
+            format: 'sillytavern-base64-envelope',
+            version: 1,
+            encoding: 'utf-8/base64',
+            chunks: encodedParts.map((part, offset) => ({
+                index: offset + 1,
+                data: part.base64,
+            })),
+        }, null, 2);
+    } else if (settings.mode === 'chunked') {
         let index = 0;
         output = parts.map((part) => {
             if (part.kind === 'preserved') {
@@ -184,7 +211,9 @@ export function createComposerController(
             try {
                 const conversion = encodeText(original, getEncodingSettings());
                 const encoded = conversion.output;
-                const decoded = decodeConversionParts(conversion.parts);
+                const decoded = conversion.settings.mode === 'structured'
+                    ? decodeStructuredEnvelope(encoded)
+                    : decodeConversionParts(conversion.parts);
 
                 if (decoded !== original) {
                     return { ok: false, code: 'round_trip_failed' };

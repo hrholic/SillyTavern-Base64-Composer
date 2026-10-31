@@ -20,6 +20,7 @@ const eventTypes = {
     GENERATION_STOPPED: 'generation_stopped',
     GENERATION_ENDED: 'generation_ended',
     CHAT_CHANGED: 'chat_changed',
+    USER_MESSAGE_RENDERED: 'user_message_rendered',
 };
 
 test('scatter transport preserves Unicode and every whitespace character exactly', () => {
@@ -39,11 +40,11 @@ test('request preview and preparation share whole/chunked transport behavior', (
     assert.ok(chunked.split('\n').filter((line) => /^\d+\/\d+:/.test(line)).length > 1);
 });
 
-test('outgoing adapter swaps the last user message only until request data is ready', () => {
+test('outgoing adapter waits for SillyTavern to render the new user message before swapping it', () => {
     const eventSource = new EventEmitter();
     const original = '  原文🙂\n第二行  ';
     const message = { is_user: true, mes: original, swipe_id: 0, swipes: [original] };
-    const chat = [message];
+    const chat = [];
     let preview = '';
     const states = [];
     const adapter = createTemporaryMessageAdapter({
@@ -51,12 +52,16 @@ test('outgoing adapter swaps the last user message only until request data is re
         eventTypes,
         getChat: () => chat,
         getSettings: () => ({ outgoingAdapterEnabled: true }),
-        getChunkSize: () => 2,
+        getTransportSettings: () => ({ outgoingMode: 'chunked', chunkSize: 2 }),
         onPreview: (value) => { preview = value; },
         onStateChange: (value) => states.push(value),
     });
 
     eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    assert.equal(message.extra, undefined);
+    assert.equal(message.mes, original);
+    chat.push(message);
+    eventSource.emit(eventTypes.USER_MESSAGE_RENDERED, 0);
     assert.equal(message.extra[MESSAGE_TRANSPORT_MARKER], true);
     assert.equal(message.extra[MESSAGE_TRANSPORT_APPLIED], undefined);
     assert.equal(message.mes, preview);
@@ -81,7 +86,7 @@ test('only the current enabled send and previously marked history are transporte
     };
     const assistant = { is_user: false, mes: 'assistant reply' };
     const current = { is_user: true, mes: 'current send' };
-    const chat = [oldUnmarked, oldMarked, assistant, current];
+    const chat = [oldUnmarked, oldMarked, assistant];
     const adapter = createTemporaryMessageAdapter({
         eventSource,
         eventTypes,
@@ -91,6 +96,8 @@ test('only the current enabled send and previously marked history are transporte
     });
 
     eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    chat.push(current);
+    eventSource.emit(eventTypes.USER_MESSAGE_RENDERED, 3);
     assert.equal(oldUnmarked.mes, 'old plain history');
     assert.equal(assistant.mes, 'assistant reply');
     assert.equal(decodeScatterTransport(oldMarked.mes), 'old opted-in history');
@@ -120,10 +127,12 @@ test('outgoing adapter is inert while disabled and restores on stop without over
     });
 
     eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    eventSource.emit(eventTypes.USER_MESSAGE_RENDERED, 0);
     assert.equal(message.mes, 'original');
 
     enabled = true;
     eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    eventSource.emit(eventTypes.USER_MESSAGE_RENDERED, 0);
     assert.notEqual(message.mes, 'original');
     message.mes = 'user changed this concurrently';
     eventSource.emit(eventTypes.GENERATION_STOPPED);
@@ -143,9 +152,11 @@ test('outgoing adapter ignores dry runs, non-normal generation and assistant mes
 
     eventSource.emit(eventTypes.GENERATION_STARTED, 'regenerate', {}, false);
     eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, true);
+    eventSource.emit(eventTypes.USER_MESSAGE_RENDERED, 0);
     assert.equal(message.mes, 'original');
     message.is_user = false;
     eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    eventSource.emit(eventTypes.USER_MESSAGE_RENDERED, 0);
     assert.equal(message.mes, 'original');
     adapter.destroy();
 });

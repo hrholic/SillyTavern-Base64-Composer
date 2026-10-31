@@ -85,11 +85,14 @@ export function createTemporaryMessageAdapter({
     onStateChange = () => {},
 }) {
     let active = null;
+    let pendingNormalSend = false;
     const supportedGenerationTypes = new Set(['normal', 'regenerate', 'swipe', 'continue']);
 
     function restore(reason = 'restore') {
+        const hadPendingSend = pendingNormalSend;
+        pendingNormalSend = false;
         if (!active) {
-            return false;
+            return hadPendingSend;
         }
 
         const records = active.records;
@@ -115,28 +118,10 @@ export function createTemporaryMessageAdapter({
         return true;
     }
 
-    function prepare(type, options = {}, dryRun = false) {
-        if (dryRun
-            || !supportedGenerationTypes.has(type)
-            || options?.quiet_prompt
-            || !getSettings().outgoingAdapterEnabled
-            || active) {
-            return false;
-        }
-
+    function prepareMarkedMessages() {
         const chat = getChat();
         if (!Array.isArray(chat)) {
             return false;
-        }
-
-        if (type === 'normal') {
-            const currentMessage = chat.at(-1);
-            if (currentMessage?.is_user && typeof currentMessage.mes === 'string') {
-                currentMessage.extra = currentMessage.extra && typeof currentMessage.extra === 'object'
-                    ? currentMessage.extra
-                    : {};
-                currentMessage.extra[MESSAGE_TRANSPORT_MARKER] = true;
-            }
         }
 
         const records = [];
@@ -151,7 +136,6 @@ export function createTemporaryMessageAdapter({
             const original = message.mes;
             const prepared = buildRequestTransport(original, getTransportSettings());
             if (decodeScatterTransport(prepared) !== original) {
-                restore('round-trip-failed');
                 return false;
             }
 
@@ -178,8 +162,48 @@ export function createTemporaryMessageAdapter({
         return true;
     }
 
+    function onGenerationStarted(type, options = {}, dryRun = false) {
+        pendingNormalSend = false;
+        if (dryRun
+            || !supportedGenerationTypes.has(type)
+            || options?.quiet_prompt
+            || !getSettings().outgoingAdapterEnabled
+            || active) {
+            return false;
+        }
+
+        // SillyTavern emits GENERATION_STARTED before it reads #send_textarea
+        // and before sendMessageAsUser adds the current message to chat.
+        if (type === 'normal' && !options?.automatic_trigger) {
+            pendingNormalSend = true;
+            return true;
+        }
+
+        return prepareMarkedMessages();
+    }
+
+    function onUserMessageRendered(messageId) {
+        if (!pendingNormalSend || !getSettings().outgoingAdapterEnabled || active) {
+            return false;
+        }
+        pendingNormalSend = false;
+
+        const chat = getChat();
+        const message = Array.isArray(chat) && Number.isInteger(messageId) ? chat[messageId] : null;
+        if (!message?.is_user || typeof message.mes !== 'string') {
+            return false;
+        }
+
+        message.extra = message.extra && typeof message.extra === 'object' ? message.extra : {};
+        message.extra[MESSAGE_TRANSPORT_MARKER] = true;
+        return prepareMarkedMessages();
+    }
+
     const bindings = [
-        [eventTypes.GENERATION_STARTED, prepare],
+        [eventTypes.GENERATION_STARTED, onGenerationStarted],
+        // USER_MESSAGE_RENDERED occurs after addOneMessage used the original
+        // text, but before sendMessageAsUser returns and coreChat is cloned.
+        [eventTypes.USER_MESSAGE_RENDERED, onUserMessageRendered],
         [eventTypes.GENERATE_AFTER_DATA, () => restore('request-ready')],
         [eventTypes.GENERATION_STOPPED, () => restore('stopped')],
         [eventTypes.GENERATION_ENDED, () => restore('ended')],

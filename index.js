@@ -6,6 +6,13 @@ import {
     DEFAULT_ENCODING_SETTINGS,
     normalizeEncodingSettings,
 } from './core.js';
+import {
+    buildScatterTransport,
+    createScopedFetchNormalizer,
+    createTemporaryMessageAdapter,
+    DEFAULT_PIPELINE_SETTINGS,
+    normalizePipelineSettings,
+} from './pipeline.js';
 
 const ROOT_ID = 'base64-composer-float';
 const STORAGE_KEY = 'base64-composer-position-v1';
@@ -44,15 +51,19 @@ function savePosition(position) {
     }
 }
 
-function loadEncodingSettings() {
+function loadSettings() {
     try {
-        return normalizeEncodingSettings(JSON.parse(localStorage.getItem(SETTINGS_KEY)) ?? {});
+        const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY)) ?? {};
+        return {
+            ...normalizeEncodingSettings(stored),
+            ...normalizePipelineSettings(stored),
+        };
     } catch {
-        return { ...DEFAULT_ENCODING_SETTINGS };
+        return { ...DEFAULT_ENCODING_SETTINGS, ...DEFAULT_PIPELINE_SETTINGS };
     }
 }
 
-function saveEncodingSettings(settings) {
+function saveSettings(settings) {
     try {
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     } catch {
@@ -86,6 +97,20 @@ function createFloatingControl() {
                 <span>保留技术格式</span>
             </label>
             <div class="b64c-hint"></div>
+            <div class="b64c-divider" aria-hidden="true"></div>
+            <label class="b64c-check">
+                <input class="b64c-outgoing" type="checkbox">
+                <span>发送前处理</span>
+            </label>
+            <label class="b64c-check">
+                <input class="b64c-response" type="checkbox">
+                <span>响应正文提取</span>
+            </label>
+            <div class="b64c-pipeline-hint">仅支持普通发送与 OpenAI 兼容聊天生成接口；默认关闭</div>
+            <details class="b64c-preview-wrap">
+                <summary>实际发送预览</summary>
+                <pre class="b64c-preview"></pre>
+            </details>
             <button class="b64c-undo" type="button" role="menuitem" disabled>撤销转换</button>
         </div>
         <div class="b64c-toast" role="status" aria-live="polite"></div>
@@ -107,16 +132,32 @@ function mount() {
     const chunkField = root.querySelector('.b64c-chunk-field');
     const chunkSizeInput = root.querySelector('.b64c-chunk-size');
     const preserveInput = root.querySelector('.b64c-preserve');
+    const outgoingInput = root.querySelector('.b64c-outgoing');
+    const responseInput = root.querySelector('.b64c-response');
+    const preview = root.querySelector('.b64c-preview');
     const settingsHint = root.querySelector('.b64c-hint');
-    let encodingSettings = loadEncodingSettings();
+    let settings = loadSettings();
     const targetResolver = createTextareaTargetResolver(document, {
         composerSelector: TEXTAREA_SELECTOR,
     });
     const controller = createComposerController(
         targetResolver.resolve,
         undefined,
-        () => encodingSettings,
+        () => settings,
     );
+    const fetchNormalizer = createScopedFetchNormalizer(window);
+    const context = globalThis.SillyTavern?.getContext?.();
+    const temporaryMessageAdapter = context?.eventSource && context?.event_types
+        ? createTemporaryMessageAdapter({
+            eventSource: context.eventSource,
+            eventTypes: context.event_types,
+            getChat: () => context.chat,
+            getSettings: () => settings,
+            getChunkSize: () => settings.chunkSize,
+            onPreview: (text) => { preview.textContent = text; },
+            onStateChange: ({ active }) => root.classList.toggle('b64c-request-active', active),
+        })
+        : null;
     let toastTimer = null;
     let dragOrigin = null;
 
@@ -167,28 +208,63 @@ function mount() {
         if (open) {
             positionMenu();
             syncUndoState();
+            updatePreview();
         }
     }
 
     function syncSettingsUI() {
-        modeSelect.value = encodingSettings.mode;
-        chunkSizeInput.value = String(encodingSettings.chunkSize);
-        preserveInput.checked = encodingSettings.preserveTechnical;
-        chunkField.hidden = encodingSettings.mode === 'whole';
-        preserveInput.disabled = encodingSettings.mode === 'structured';
-        settingsHint.textContent = encodingSettings.mode === 'structured'
+        modeSelect.value = settings.mode;
+        chunkSizeInput.value = String(settings.chunkSize);
+        preserveInput.checked = settings.preserveTechnical;
+        outgoingInput.checked = settings.outgoingAdapterEnabled;
+        responseInput.checked = settings.responseNormalizerEnabled;
+        chunkField.hidden = settings.mode === 'whole';
+        preserveInput.disabled = settings.mode === 'structured';
+        settingsHint.textContent = settings.mode === 'structured'
             ? '结构化封装会编码完整原文，不应用格式保留'
             : '围栏/行内代码、Markdown 链接、HTML 标签保持原样';
     }
 
+    function updatePreview() {
+        if (!settings.outgoingAdapterEnabled) {
+            preview.textContent = '发送前处理已关闭；不会修改请求。';
+            return;
+        }
+        const targetText = targetResolver.resolve()?.value;
+        const lastMessage = context?.chat?.at?.(-1);
+        const source = typeof targetText === 'string' && targetText.length > 0
+            ? targetText
+            : lastMessage?.is_user && typeof lastMessage.mes === 'string'
+                ? lastMessage.mes
+                : '';
+        preview.textContent = source.length > 0
+            ? buildScatterTransport(source, settings.chunkSize)
+            : '没有可预览的发送文本。';
+    }
+
     function updateSettings() {
-        encodingSettings = normalizeEncodingSettings({
-            mode: modeSelect.value,
-            chunkSize: chunkSizeInput.value,
-            preserveTechnical: preserveInput.checked,
-        });
+        settings = {
+            ...normalizeEncodingSettings({
+                mode: modeSelect.value,
+                chunkSize: chunkSizeInput.value,
+                preserveTechnical: preserveInput.checked,
+            }),
+            ...normalizePipelineSettings({
+                outgoingAdapterEnabled: outgoingInput.checked,
+                responseNormalizerEnabled: responseInput.checked,
+            }),
+        };
         syncSettingsUI();
-        saveEncodingSettings(encodingSettings);
+        saveSettings(settings);
+        updatePreview();
+        if (settings.responseNormalizerEnabled) {
+            fetchNormalizer.enable();
+        } else {
+            fetchNormalizer.disable();
+        }
+        if (!settings.outgoingAdapterEnabled) {
+            temporaryMessageAdapter?.restore('disabled');
+        }
     }
 
     function applyPosition(position, persist = false) {
@@ -295,6 +371,10 @@ function mount() {
 
     const savedPosition = loadSavedPosition();
     syncSettingsUI();
+    updatePreview();
+    if (settings.responseNormalizerEnabled) {
+        fetchNormalizer.enable();
+    }
     requestAnimationFrame(() => {
         if (savedPosition) {
             applyPosition(savedPosition);
@@ -312,6 +392,8 @@ function mount() {
     modeSelect.addEventListener('change', updateSettings);
     chunkSizeInput.addEventListener('change', updateSettings);
     preserveInput.addEventListener('change', updateSettings);
+    outgoingInput.addEventListener('change', updateSettings);
+    responseInput.addEventListener('change', updateSettings);
     document.addEventListener('input', onDocumentInput, true);
     document.addEventListener('focusin', onDocumentFocusIn, true);
     document.addEventListener('pointerdown', onOutsidePointerDown, true);
@@ -331,12 +413,16 @@ function mount() {
         modeSelect.removeEventListener('change', updateSettings);
         chunkSizeInput.removeEventListener('change', updateSettings);
         preserveInput.removeEventListener('change', updateSettings);
+        outgoingInput.removeEventListener('change', updateSettings);
+        responseInput.removeEventListener('change', updateSettings);
         document.removeEventListener('input', onDocumentInput, true);
         document.removeEventListener('focusin', onDocumentFocusIn, true);
         document.removeEventListener('pointerdown', onOutsidePointerDown, true);
         window.removeEventListener('resize', keepInViewport);
         window.visualViewport?.removeEventListener('resize', keepInViewport);
         window.visualViewport?.removeEventListener('scroll', keepInViewport);
+        temporaryMessageAdapter?.destroy();
+        fetchNormalizer.destroy();
         root.remove();
     };
 }

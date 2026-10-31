@@ -19,9 +19,14 @@ test('UI keeps the requested 1px border and touch-safe drag behavior', async () 
     assert.match(css, /touch-action:\s*none/);
 });
 
-test('entrypoint targets only the composer and contains no network or send-button calls', async () => {
+test('entrypoint keeps composer support and does not trigger send or generation calls', async () => {
     const source = await readFile(new URL('index.js', projectRoot), 'utf8');
     assert.match(source, /#send_textarea/);
-    assert.doesNotMatch(source, /\bfetch\s*\(/);
     assert.doesNotMatch(source, /send_but|MESSAGE_SENT|generateRaw|generateQuietPrompt/);
+});
+
+test('response adaptation is restricted to the OpenAI-compatible chat completion endpoint', async () => {
+    const source = await readFile(new URL('pipeline.js', projectRoot), 'utf8');
+    assert.match(source, /\/api\/backends\/chat-completions\/generate/);
+    assert.doesNotMatch(source, /text-completions\/generate|gateway|temperature|top_p|tool_choice/);
 });

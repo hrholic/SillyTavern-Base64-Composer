@@ -1,0 +1,195 @@
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import test from 'node:test';
+
+import {
+    buildScatterTransport,
+    createScopedFetchNormalizer,
+    createTemporaryMessageAdapter,
+    decodeScatterTransport,
+    normalizeChatCompletionResponse,
+    normalizeCompletionObject,
+} from '../pipeline.js';
+
+const eventTypes = {
+    GENERATION_STARTED: 'generation_started',
+    GENERATE_AFTER_DATA: 'generate_after_data',
+    GENERATION_STOPPED: 'generation_stopped',
+    GENERATION_ENDED: 'generation_ended',
+    CHAT_CHANGED: 'chat_changed',
+};
+
+test('scatter transport preserves Unicode and every whitespace character exactly', () => {
+    const original = '  中文🙂\n\r\n\t尾部  \n';
+    const transport = buildScatterTransport(original, 3);
+    assert.match(transport, /^\[BASE64-SCATTER\/1\]/);
+    assert.equal(decodeScatterTransport(transport), original);
+});
+
+test('outgoing adapter swaps the last user message only until request data is ready', () => {
+    const eventSource = new EventEmitter();
+    const original = '  原文🙂\n第二行  ';
+    const message = { is_user: true, mes: original, swipe_id: 0, swipes: [original] };
+    const chat = [message];
+    let preview = '';
+    const states = [];
+    const adapter = createTemporaryMessageAdapter({
+        eventSource,
+        eventTypes,
+        getChat: () => chat,
+        getSettings: () => ({ outgoingAdapterEnabled: true }),
+        getChunkSize: () => 2,
+        onPreview: (value) => { preview = value; },
+        onStateChange: (value) => states.push(value),
+    });
+
+    eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    assert.equal(message.mes, preview);
+    assert.equal(message.swipes[0], preview);
+    assert.equal(decodeScatterTransport(preview), original);
+
+    eventSource.emit(eventTypes.GENERATE_AFTER_DATA, { prompt: 'already assembled' }, false);
+    assert.equal(message.mes, original);
+    assert.equal(message.swipes[0], original);
+    assert.deepEqual(states.map((state) => state.active), [true, false]);
+    adapter.destroy();
+});
+
+test('outgoing adapter is inert while disabled and restores on stop without overwriting concurrent edits', () => {
+    const eventSource = new EventEmitter();
+    const message = { is_user: true, mes: 'original' };
+    let enabled = false;
+    const adapter = createTemporaryMessageAdapter({
+        eventSource,
+        eventTypes,
+        getChat: () => [message],
+        getSettings: () => ({ outgoingAdapterEnabled: enabled }),
+    });
+
+    eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    assert.equal(message.mes, 'original');
+
+    enabled = true;
+    eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    assert.notEqual(message.mes, 'original');
+    message.mes = 'user changed this concurrently';
+    eventSource.emit(eventTypes.GENERATION_STOPPED);
+    assert.equal(message.mes, 'user changed this concurrently');
+    adapter.destroy();
+});
+
+test('outgoing adapter ignores dry runs, non-normal generation and assistant messages', () => {
+    const eventSource = new EventEmitter();
+    const message = { is_user: true, mes: 'original' };
+    const adapter = createTemporaryMessageAdapter({
+        eventSource,
+        eventTypes,
+        getChat: () => [message],
+        getSettings: () => ({ outgoingAdapterEnabled: true }),
+    });
+
+    eventSource.emit(eventTypes.GENERATION_STARTED, 'regenerate', {}, false);
+    eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, true);
+    assert.equal(message.mes, 'original');
+    message.is_user = false;
+    eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    assert.equal(message.mes, 'original');
+    adapter.destroy();
+});
+
+test('JSON completion extracts a known body field while preserving tools and finish_reason', () => {
+    const input = {
+        id: 'x',
+        choices: [{
+            index: 0,
+            finish_reason: 'tool_calls',
+            message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [{
+                    id: 'call_1',
+                    type: 'function',
+                    function: { name: 'deliver', arguments: JSON.stringify({ body: ' 正文🙂\n' }) },
+                }],
+            },
+        }],
+    };
+    const result = normalizeCompletionObject(input);
+    assert.equal(result.changed, true);
+    assert.equal(result.value.choices[0].message.content, ' 正文🙂\n');
+    assert.equal(result.value.choices[0].finish_reason, 'tool_calls');
+    assert.deepEqual(result.value.choices[0].message.tool_calls, input.choices[0].message.tool_calls);
+});
+
+test('normal text, refusal text, errors and unknown argument structures are unchanged', () => {
+    const values = [
+        { choices: [{ message: { content: 'normal response' }, finish_reason: 'stop' }] },
+        { choices: [{ message: { content: 'I cannot help with that.', refusal: 'policy' }, finish_reason: 'stop' }] },
+        { error: { message: 'upstream failed' } },
+        { choices: [{ message: { content: null, tool_calls: [{ function: { arguments: '{"other":"x"}' } }] } }] },
+    ];
+    for (const value of values) {
+        const result = normalizeCompletionObject(value);
+        assert.equal(result.changed, false);
+        assert.equal(result.value, value);
+    }
+});
+
+test('SSE tool arguments split across byte and event boundaries inject body once and retain usage/DONE', async () => {
+    const events = [
+        'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"bo"}}]},"finish_reason":null}]}\n\n',
+        'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"dy\\":\\"正文🙂\\"}"}}]},"finish_reason":null}]}\n\n',
+        'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+        'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2}}\n\n',
+        'data: [DONE]\n\n',
+    ].join('');
+    const bytes = new TextEncoder().encode(events);
+    const stream = new ReadableStream({
+        start(controller) {
+            controller.enqueue(bytes.slice(0, 37));
+            controller.enqueue(bytes.slice(37, 113));
+            controller.enqueue(bytes.slice(113));
+            controller.close();
+        },
+    });
+    const response = new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
+    const normalized = await normalizeChatCompletionResponse(response);
+    const text = await normalized.text();
+
+    const parsedEvents = text.split('\n')
+        .filter((line) => line.startsWith('data: {'))
+        .map((line) => JSON.parse(line.slice(6)));
+    const injectedContent = parsedEvents.flatMap((event) => event.choices ?? [])
+        .map((choice) => choice.delta?.content)
+        .filter((content) => content !== undefined);
+    assert.deepEqual(injectedContent, ['正文🙂']);
+    assert.match(text, /"finish_reason":"tool_calls"/);
+    assert.match(text, /"usage":\{"prompt_tokens":1,"completion_tokens":2\}/);
+    assert.match(text, /data: \[DONE\]/);
+});
+
+test('fetch normalizer installs only when enabled and scopes changes to the chat completion POST endpoint', async () => {
+    const payload = {
+        choices: [{
+            message: { content: null, function_call: { arguments: '{"body":"visible"}' } },
+            finish_reason: 'stop',
+        }],
+    };
+    let calls = 0;
+    const originalFetch = async () => {
+        calls += 1;
+        return new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } });
+    };
+    const fakeWindow = { fetch: originalFetch, location: { href: 'https://localhost/' } };
+    const controller = createScopedFetchNormalizer(fakeWindow);
+    assert.equal(fakeWindow.fetch, originalFetch);
+
+    controller.enable();
+    const unrelated = await fakeWindow.fetch('/api/other', { method: 'POST' });
+    assert.equal((await unrelated.json()).choices[0].message.content, null);
+    const scoped = await fakeWindow.fetch('/api/backends/chat-completions/generate', { method: 'POST' });
+    assert.equal((await scoped.json()).choices[0].message.content, 'visible');
+    controller.disable();
+    assert.equal(fakeWindow.fetch, originalFetch);
+    assert.equal(calls, 2);
+});

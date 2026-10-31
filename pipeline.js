@@ -1,0 +1,427 @@
+import { base64ToUtf8, utf8ToBase64 } from './core.js';
+
+export const CHAT_COMPLETION_ENDPOINT = '/api/backends/chat-completions/generate';
+
+export const DEFAULT_PIPELINE_SETTINGS = Object.freeze({
+    outgoingAdapterEnabled: false,
+    responseNormalizerEnabled: false,
+});
+
+export function normalizePipelineSettings(settings = {}) {
+    return {
+        outgoingAdapterEnabled: settings.outgoingAdapterEnabled === true,
+        responseNormalizerEnabled: settings.responseNormalizerEnabled === true,
+    };
+}
+
+/**
+ * A visible, reversible transport used only while SillyTavern assembles a
+ * normal outgoing request. Chunks are ordered and independently decodable.
+ */
+export function buildScatterTransport(text, requestedChunkSize = 8) {
+    const parsedSize = Number.parseInt(requestedChunkSize, 10);
+    const chunkSize = Number.isFinite(parsedSize) ? Math.min(1000, Math.max(1, parsedSize)) : 8;
+    const codePoints = Array.from(text);
+    const chunks = [];
+
+    for (let offset = 0; offset < codePoints.length; offset += chunkSize) {
+        chunks.push(utf8ToBase64(codePoints.slice(offset, offset + chunkSize).join('')));
+    }
+
+    const lines = chunks.map((data, offset) => `${offset + 1}/${chunks.length}:${data}`);
+    return [
+        '[BASE64-SCATTER/1]',
+        'encoding: utf-8/base64',
+        'reconstruct: decode data chunks in ascending index and concatenate exactly without separators',
+        ...lines,
+        '[/BASE64-SCATTER/1]',
+    ].join('\n');
+}
+
+export function decodeScatterTransport(transport) {
+    const lines = transport.split('\n');
+    if (lines[0] !== '[BASE64-SCATTER/1]'
+        || lines[1] !== 'encoding: utf-8/base64'
+        || lines[2] !== 'reconstruct: decode data chunks in ascending index and concatenate exactly without separators'
+        || lines.at(-1) !== '[/BASE64-SCATTER/1]') {
+        throw new Error('Invalid Base64 scatter transport.');
+    }
+
+    const chunkLines = lines.slice(3, -1);
+    return chunkLines.map((line, offset) => {
+        const match = line.match(/^(\d+)\/(\d+):([A-Za-z0-9+/]*={0,2})$/);
+        if (!match
+            || Number(match[1]) !== offset + 1
+            || Number(match[2]) !== chunkLines.length) {
+            throw new Error('Invalid or unordered Base64 scatter chunk.');
+        }
+        return base64ToUtf8(match[3]);
+    }).join('');
+}
+
+/**
+ * Temporarily swaps only the last user message during a normal generation.
+ * The original is restored once generate_data exists, plus stop/end fallbacks.
+ */
+export function createTemporaryMessageAdapter({
+    eventSource,
+    eventTypes,
+    getChat,
+    getSettings,
+    getChunkSize = () => 8,
+    onPreview = () => {},
+    onStateChange = () => {},
+}) {
+    let active = null;
+
+    function restore(reason = 'restore') {
+        if (!active) {
+            return false;
+        }
+
+        const record = active;
+        active = null;
+
+        if (record.message.mes === record.prepared) {
+            record.message.mes = record.original;
+        }
+        if (record.swipeChanged
+            && record.message.swipes?.[record.swipeId] === record.prepared) {
+            record.message.swipes[record.swipeId] = record.originalSwipe;
+        }
+
+        onStateChange({ active: false, reason });
+        return true;
+    }
+
+    function prepare(type, options = {}, dryRun = false) {
+        if (dryRun
+            || type !== 'normal'
+            || options?.quiet_prompt
+            || !getSettings().outgoingAdapterEnabled
+            || active) {
+            return false;
+        }
+
+        const chat = getChat();
+        const message = Array.isArray(chat) ? chat.at(-1) : null;
+        if (!message?.is_user || typeof message.mes !== 'string') {
+            return false;
+        }
+
+        const original = message.mes;
+        const prepared = buildScatterTransport(original, getChunkSize());
+        if (decodeScatterTransport(prepared) !== original) {
+            return false;
+        }
+
+        const swipeId = Number.isInteger(message.swipe_id) ? message.swipe_id : -1;
+        const originalSwipe = swipeId >= 0 ? message.swipes?.[swipeId] : undefined;
+        const swipeChanged = typeof originalSwipe === 'string' && originalSwipe === original;
+
+        active = {
+            message,
+            original,
+            prepared,
+            swipeId,
+            originalSwipe,
+            swipeChanged,
+        };
+        message.mes = prepared;
+        if (swipeChanged) {
+            message.swipes[swipeId] = prepared;
+        }
+
+        onPreview(prepared);
+        onStateChange({ active: true, reason: 'prepare' });
+        return true;
+    }
+
+    const bindings = [
+        [eventTypes.GENERATION_STARTED, prepare],
+        [eventTypes.GENERATE_AFTER_DATA, () => restore('request-ready')],
+        [eventTypes.GENERATION_STOPPED, () => restore('stopped')],
+        [eventTypes.GENERATION_ENDED, () => restore('ended')],
+        [eventTypes.CHAT_CHANGED, () => restore('chat-changed')],
+    ].filter(([name]) => Boolean(name));
+
+    for (const [name, handler] of bindings) {
+        eventSource.on(name, handler);
+    }
+
+    return {
+        restore,
+        isActive: () => Boolean(active),
+        destroy() {
+            restore('destroyed');
+            for (const [name, handler] of bindings) {
+                eventSource.removeListener?.(name, handler);
+            }
+        },
+    };
+}
+
+const BODY_FIELD_NAMES = ['body', 'content', 'text', 'response'];
+
+function extractBodyFromArguments(argumentsText) {
+    if (typeof argumentsText !== 'string') {
+        return null;
+    }
+
+    try {
+        const value = JSON.parse(argumentsText);
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return null;
+        }
+        for (const field of BODY_FIELD_NAMES) {
+            if (typeof value[field] === 'string' && value[field].length > 0) {
+                return value[field];
+            }
+        }
+    } catch {
+        // Unknown or incomplete arguments are intentionally left unchanged.
+    }
+    return null;
+}
+
+function extractBodyFromMessage(message) {
+    const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+    for (const toolCall of toolCalls) {
+        const body = extractBodyFromArguments(toolCall?.function?.arguments);
+        if (body !== null) {
+            return body;
+        }
+    }
+    return extractBodyFromArguments(message?.function_call?.arguments);
+}
+
+/** Add visible content only when content is absent and tool args contain a known body field. */
+export function normalizeCompletionObject(value) {
+    if (!value || typeof value !== 'object' || value.error || !Array.isArray(value.choices)) {
+        return { changed: false, value };
+    }
+
+    let changed = false;
+    const choices = value.choices.map((choice) => {
+        if (!choice?.message || (typeof choice.message.content === 'string' && choice.message.content.length > 0)) {
+            return choice;
+        }
+        const body = extractBodyFromMessage(choice.message);
+        if (body === null) {
+            return choice;
+        }
+        changed = true;
+        return {
+            ...choice,
+            message: { ...choice.message, content: body },
+        };
+    });
+
+    return changed ? { changed: true, value: { ...value, choices } } : { changed: false, value };
+}
+
+function createStreamEventNormalizer(kind) {
+    const argumentBuffers = new Map();
+    const injectedChoices = new Set();
+
+    function collect(choice) {
+        const choiceIndex = choice?.index ?? 0;
+        const toolCalls = Array.isArray(choice?.delta?.tool_calls) ? choice.delta.tool_calls : [];
+        for (const toolCall of toolCalls) {
+            const fragment = toolCall?.function?.arguments;
+            if (typeof fragment !== 'string') {
+                continue;
+            }
+            const toolIndex = toolCall.index ?? 0;
+            const key = `${choiceIndex}:${toolIndex}`;
+            argumentBuffers.set(key, (argumentBuffers.get(key) ?? '') + fragment);
+        }
+    }
+
+    function bodyForChoice(choiceIndex) {
+        for (const [key, text] of argumentBuffers) {
+            if (key.startsWith(`${choiceIndex}:`)) {
+                const body = extractBodyFromArguments(text);
+                if (body !== null) {
+                    return body;
+                }
+            }
+        }
+        return null;
+    }
+
+    function normalizeData(value) {
+        const direct = normalizeCompletionObject(value);
+        if (direct.changed || !value || typeof value !== 'object' || value.error || !Array.isArray(value.choices)) {
+            return direct;
+        }
+
+        let changed = false;
+        const choices = value.choices.map((choice) => {
+            collect(choice);
+            const choiceIndex = choice?.index ?? 0;
+            const existingContent = choice?.delta?.content;
+            if (choice?.finish_reason == null
+                || injectedChoices.has(choiceIndex)
+                || (typeof existingContent === 'string' && existingContent.length > 0)) {
+                return choice;
+            }
+
+            const body = bodyForChoice(choiceIndex);
+            if (body === null) {
+                return choice;
+            }
+
+            injectedChoices.add(choiceIndex);
+            changed = true;
+            return {
+                ...choice,
+                delta: { ...(choice.delta ?? {}), content: body },
+            };
+        });
+
+        return changed ? { changed: true, value: { ...value, choices } } : { changed: false, value };
+    }
+
+    return function normalizeLine(line) {
+        let prefix = '';
+        let jsonText = line;
+        if (kind === 'sse') {
+            const match = line.match(/^(\s*data:\s?)(.*)$/);
+            if (!match || match[2] === '[DONE]') {
+                return line;
+            }
+            prefix = match[1];
+            jsonText = match[2];
+        } else if (line.trim().length === 0) {
+            return line;
+        }
+
+        try {
+            const parsed = JSON.parse(jsonText);
+            const normalized = normalizeData(parsed);
+            return normalized.changed ? `${prefix}${JSON.stringify(normalized.value)}` : line;
+        } catch {
+            return line;
+        }
+    };
+}
+
+function transformLineStream(stream, kind) {
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    const normalizeLine = createStreamEventNormalizer(kind);
+    let buffer = '';
+
+    return stream.pipeThrough(new TransformStream({
+        transform(chunk, controller) {
+            buffer += decoder.decode(chunk, { stream: true });
+            let newlineIndex;
+            while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
+                const rawLine = buffer.slice(0, newlineIndex);
+                buffer = buffer.slice(newlineIndex + 1);
+                const hasCarriageReturn = rawLine.endsWith('\r');
+                const line = hasCarriageReturn ? rawLine.slice(0, -1) : rawLine;
+                controller.enqueue(encoder.encode(`${normalizeLine(line)}${hasCarriageReturn ? '\r' : ''}\n`));
+            }
+        },
+        flush(controller) {
+            buffer += decoder.decode();
+            if (buffer.length > 0) {
+                controller.enqueue(encoder.encode(normalizeLine(buffer)));
+            }
+        },
+    }));
+}
+
+function responseWithBody(response, body) {
+    const headers = new Headers(response.headers);
+    headers.delete('content-length');
+    return new Response(body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+    });
+}
+
+export async function normalizeChatCompletionResponse(response) {
+    if (!(response instanceof Response) || !response.ok || !response.body) {
+        return response;
+    }
+
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+    if (contentType.includes('text/event-stream')) {
+        return responseWithBody(response, transformLineStream(response.body, 'sse'));
+    }
+    if (contentType.includes('application/x-ndjson') || contentType.includes('application/ndjson')) {
+        return responseWithBody(response, transformLineStream(response.body, 'ndjson'));
+    }
+    if (!contentType.includes('application/json')) {
+        return response;
+    }
+
+    try {
+        const parsed = await response.clone().json();
+        const normalized = normalizeCompletionObject(parsed);
+        return normalized.changed
+            ? responseWithBody(response, JSON.stringify(normalized.value))
+            : response;
+    } catch {
+        return response;
+    }
+}
+
+function isScopedRequest(input, init, baseUrl) {
+    const method = String(init?.method ?? input?.method ?? 'GET').toUpperCase();
+    if (method !== 'POST') {
+        return false;
+    }
+
+    try {
+        const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, baseUrl);
+        return url.pathname === CHAT_COMPLETION_ENDPOINT;
+    } catch {
+        return false;
+    }
+}
+
+/** Install only while enabled; unrelated fetch calls are returned untouched. */
+export function createScopedFetchNormalizer(windowObject) {
+    let originalFetch = null;
+    let wrappedFetch = null;
+    let enabled = false;
+    let activeWrapper = null;
+
+    function enable() {
+        if (enabled) {
+            return;
+        }
+        enabled = true;
+        originalFetch = windowObject.fetch;
+        const delegateFetch = originalFetch;
+        const wrapperToken = {};
+        activeWrapper = wrapperToken;
+        wrappedFetch = async function base64ComposerFetch(input, init) {
+            const response = await delegateFetch.call(this, input, init);
+            if (!enabled
+                || activeWrapper !== wrapperToken
+                || !isScopedRequest(input, init, windowObject.location?.href)) {
+                return response;
+            }
+            return normalizeChatCompletionResponse(response);
+        };
+        windowObject.fetch = wrappedFetch;
+    }
+
+    function disable() {
+        enabled = false;
+        activeWrapper = null;
+        if (windowObject.fetch === wrappedFetch) {
+            windowObject.fetch = originalFetch;
+            originalFetch = null;
+            wrappedFetch = null;
+        }
+    }
+
+    return { enable, disable, destroy: disable, isEnabled: () => enabled };
+}

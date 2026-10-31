@@ -18,9 +18,13 @@ test('UI keeps the requested 1px border and touch-safe drag behavior', async () 
     assert.match(css, /border:\s*1px solid var\(--b64c-border\)/);
     assert.match(css, /touch-action:\s*none/);
     assert.match(css, /--b64c-bg:\s*rgba\([^;]+,\s*0\.5\)/);
+    assert.match(css, /--b64c-action-bg:\s*rgba\([^;]+,\s*0\.2\)/);
+    assert.match(css, /--b64c-action-bg-active:\s*rgba\([^;]+,\s*0\.5\)/);
+    assert.match(css, /\.b64c-action\s*\{[^}]*border:\s*1px solid var\(--b64c-action-border\);[^}]*background:\s*var\(--b64c-action-bg\);/s);
     assert.match(css, /#chat \.b64c-message-badge\s*\{[^}]*border:\s*0;[^}]*background:\s*none;[^}]*box-shadow:\s*none;[^}]*opacity:\s*0\.58;/s);
+    assert.match(css, /#chat \.b64c-message-badge\s*\{[^}]*margin:\s*3px 0 12px 12px;/s);
     assert.match(css, /\[data-theme="light"\]/);
-    assert.match(css, /\.b64c-send-enabled \.b64c-action\s*\{\s*border-color:\s*var\(--b64c-border-active\)/);
+    assert.match(css, /\.b64c-send-enabled \.b64c-action\s*\{[^}]*border-color:\s*var\(--b64c-border-active\);[^}]*background:\s*var\(--b64c-action-bg-active\);/s);
     assert.doesNotMatch(css, /77d995|119,\s*217,\s*149/);
     assert.doesNotMatch(css, /b64c-request-active \.b64c-action::after/);
 });

@@ -1,6 +1,9 @@
 #base64-composer-float {
     --b64c-border: rgba(255, 255, 255, 0.5);
     --b64c-border-active: rgba(255, 255, 255, 0.9);
+    --b64c-action-border: rgba(255, 255, 255, 0.28);
+    --b64c-action-bg: rgba(24, 24, 30, 0.2);
+    --b64c-action-bg-active: rgba(24, 24, 30, 0.5);
     --b64c-bg: rgba(24, 24, 30, 0.5);
     --b64c-text: #fff;
     --b64c-muted: rgba(255, 255, 255, 0.72);
@@ -20,6 +23,9 @@
 #base64-composer-float[data-theme="light"] {
     --b64c-border: rgba(24, 24, 30, 0.5);
     --b64c-border-active: rgba(24, 24, 30, 0.9);
+    --b64c-action-border: rgba(24, 24, 30, 0.28);
+    --b64c-action-bg: rgba(246, 246, 248, 0.2);
+    --b64c-action-bg-active: rgba(246, 246, 248, 0.5);
     --b64c-bg: rgba(246, 246, 248, 0.5);
     --b64c-text: #202025;
     --b64c-muted: rgba(32, 32, 37, 0.7);
@@ -32,9 +38,9 @@
     height: 34px;
     margin: 0;
     padding: 0;
-    border: 1px solid var(--b64c-border);
+    border: 1px solid var(--b64c-action-border);
     border-radius: 10px;
-    background: var(--b64c-bg);
+    background: var(--b64c-action-bg);
     color: var(--b64c-text);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
     backdrop-filter: blur(4px);
@@ -48,6 +54,7 @@
 
 #base64-composer-float.b64c-send-enabled .b64c-action {
     border-color: var(--b64c-border-active);
+    background: var(--b64c-action-bg-active);
 }
 
 #base64-composer-float .b64c-action:focus-visible,
@@ -206,7 +213,7 @@
 
 #chat .b64c-message-badge {
     display: inline-block;
-    margin: 3px 0 0 6px;
+    margin: 3px 0 12px 12px;
     padding: 0;
     border: 0;
     border-radius: 0;

@@ -21,6 +21,8 @@ test('UI keeps the requested 1px border and touch-safe drag behavior', async () 
     assert.match(css, /--b64c-action-bg:\s*rgba\([^;]+,\s*0\.2\)/);
     assert.match(css, /--b64c-action-bg-active:\s*rgba\([^;]+,\s*0\.5\)/);
     assert.match(css, /\.b64c-action\s*\{[^}]*border:\s*1px solid var\(--b64c-action-border\);[^}]*background:\s*var\(--b64c-action-bg\);/s);
+    assert.match(css, /\.b64c-action > span\s*\{[^}]*opacity:\s*0\.5;/s);
+    assert.match(css, /\.b64c-send-enabled \.b64c-action > span\s*\{[^}]*opacity:\s*1;/s);
     assert.match(css, /#chat \.b64c-message-badge\s*\{[^}]*border:\s*0;[^}]*background:\s*none;[^}]*box-shadow:\s*none;[^}]*opacity:\s*0\.58;/s);
     assert.match(css, /#chat \.b64c-message-badge\s*\{[^}]*margin:\s*3px 0 12px 12px;/s);
     assert.match(css, /\.b64c-message-snapshot\s*\{[^}]*max-width:\s*calc\(100% - 24px\);[^}]*max-height|\.b64c-snapshot-content\s*\{[^}]*max-height:/s);

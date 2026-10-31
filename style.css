@@ -61,6 +61,14 @@
     -webkit-tap-highlight-color: transparent;
 }
 
+#base64-composer-float .b64c-action > span {
+    opacity: 0.5;
+}
+
+#base64-composer-float.b64c-send-enabled .b64c-action > span {
+    opacity: 1;
+}
+
 #base64-composer-float.b64c-send-enabled .b64c-action {
     border-color: var(--b64c-border-active);
     background: var(--b64c-action-bg-active);

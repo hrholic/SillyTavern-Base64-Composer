@@ -1,10 +1,10 @@
 {
-    "display_name": "Base64 整段转换",
+    "display_name": "Base64 发送编码",
     "loading_order": 100,
     "js": "index.js",
     "css": "style.css",
     "author": "SillyTavern-Base64-Composer contributors",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "homePage": "https://github.com/hrholic/SillyTavern-Base64-Composer",
     "auto_update": false
 }

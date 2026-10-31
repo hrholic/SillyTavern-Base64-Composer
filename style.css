@@ -46,6 +46,28 @@
     box-shadow: 0 0 5px rgba(119, 217, 149, 0.9);
 }
 
+#base64-composer-float.b64c-send-enabled .b64c-action {
+    border-color: rgba(119, 217, 149, 0.72);
+}
+
+#base64-composer-float .b64c-send-status {
+    position: absolute;
+    top: calc(100% + 3px);
+    left: 50%;
+    padding: 2px 4px;
+    border-radius: 4px;
+    background: rgba(24, 24, 30, 0.62);
+    color: rgba(255, 255, 255, 0.66);
+    font: 9px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    white-space: nowrap;
+    pointer-events: none;
+    transform: translateX(-50%);
+}
+
+#base64-composer-float .b64c-send-status[hidden] {
+    display: none;
+}
+
 #base64-composer-float .b64c-action:focus-visible,
 #base64-composer-float .b64c-undo:focus-visible {
     outline: 2px solid rgba(125, 190, 255, 0.95);
@@ -88,6 +110,7 @@
     display: none;
 }
 
+#base64-composer-float .b64c-manual,
 #base64-composer-float .b64c-undo {
     width: 100%;
     min-height: 32px;
@@ -129,6 +152,7 @@
 }
 
 #base64-composer-float .b64c-mode,
+#base64-composer-float .b64c-outgoing-mode,
 #base64-composer-float .b64c-chunk-size {
     width: 86px;
     min-height: 27px;
@@ -188,8 +212,27 @@
     border-radius: 0 0 6px 6px;
 }
 
+#base64-composer-float .b64c-manual {
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 0;
+}
+
+#base64-composer-float .b64c-manual:hover,
 #base64-composer-float .b64c-undo:hover:not(:disabled) {
     background: rgba(255, 255, 255, 0.1);
+}
+
+#chat .b64c-message-badge {
+    display: inline-block;
+    margin: 3px 0 0 6px;
+    padding: 1px 5px;
+    border: 1px solid rgba(128, 190, 150, 0.28);
+    border-radius: 999px;
+    color: rgba(180, 220, 192, 0.62);
+    font: 9px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    vertical-align: middle;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 #base64-composer-float .b64c-undo:disabled {

@@ -22,7 +22,8 @@ test('UI keeps the requested 1px border and touch-safe drag behavior', async () 
 test('entrypoint keeps composer support and does not trigger send or generation calls', async () => {
     const source = await readFile(new URL('index.js', projectRoot), 'utf8');
     assert.match(source, /#send_textarea/);
-    assert.doesNotMatch(source, /send_but|MESSAGE_SENT|generateRaw|generateQuietPrompt/);
+    assert.doesNotMatch(source, /send_but|generateRaw|generateQuietPrompt/);
+    assert.match(source, /textContent = '已编码'/);
 });
 
 test('response adaptation is restricted to the OpenAI-compatible chat completion endpoint', async () => {

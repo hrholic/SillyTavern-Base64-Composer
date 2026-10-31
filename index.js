@@ -7,10 +7,11 @@ import {
     normalizeEncodingSettings,
 } from './core.js';
 import {
-    buildScatterTransport,
+    buildRequestTransport,
     createScopedFetchNormalizer,
     createTemporaryMessageAdapter,
     DEFAULT_PIPELINE_SETTINGS,
+    MESSAGE_TRANSPORT_APPLIED,
     normalizePipelineSettings,
 } from './pipeline.js';
 
@@ -76,16 +77,24 @@ function createFloatingControl() {
     root.id = ROOT_ID;
     root.className = 'b64c-float';
     root.innerHTML = `
-        <button class="b64c-action" type="button" aria-label="轻点整段转换为 Base64；长按打开更多选项" aria-expanded="false">
+        <button class="b64c-action" type="button" aria-label="轻点切换发送时编码；长按打开更多选项" aria-expanded="false">
             <span aria-hidden="true">B64</span>
         </button>
+        <span class="b64c-send-status" hidden>发送时编码</span>
         <div class="b64c-menu" role="menu" hidden>
             <label class="b64c-field">
-                <span>编码模式</span>
+                <span>手动工具模式</span>
                 <select class="b64c-mode">
                     <option value="whole">整段</option>
                     <option value="chunked">分块</option>
                     <option value="structured">结构化封装</option>
+                </select>
+            </label>
+            <label class="b64c-field">
+                <span>发送编码</span>
+                <select class="b64c-outgoing-mode">
+                    <option value="chunked">分块</option>
+                    <option value="whole">整段</option>
                 </select>
             </label>
             <label class="b64c-field b64c-chunk-field" hidden>
@@ -111,6 +120,7 @@ function createFloatingControl() {
                 <summary>实际发送预览</summary>
                 <pre class="b64c-preview"></pre>
             </details>
+            <button class="b64c-manual" type="button" role="menuitem">手动替换当前输入框</button>
             <button class="b64c-undo" type="button" role="menuitem" disabled>撤销转换</button>
         </div>
         <div class="b64c-toast" role="status" aria-live="polite"></div>
@@ -131,10 +141,13 @@ function mount() {
     const modeSelect = root.querySelector('.b64c-mode');
     const chunkField = root.querySelector('.b64c-chunk-field');
     const chunkSizeInput = root.querySelector('.b64c-chunk-size');
+    const outgoingModeSelect = root.querySelector('.b64c-outgoing-mode');
     const preserveInput = root.querySelector('.b64c-preserve');
     const outgoingInput = root.querySelector('.b64c-outgoing');
     const responseInput = root.querySelector('.b64c-response');
     const preview = root.querySelector('.b64c-preview');
+    const manualButton = root.querySelector('.b64c-manual');
+    const sendStatus = root.querySelector('.b64c-send-status');
     const settingsHint = root.querySelector('.b64c-hint');
     let settings = loadSettings();
     const targetResolver = createTextareaTargetResolver(document, {
@@ -153,12 +166,18 @@ function mount() {
             eventTypes: context.event_types,
             getChat: () => context.chat,
             getSettings: () => settings,
-            getChunkSize: () => settings.chunkSize,
+            getTransportSettings: () => settings,
             onPreview: (text) => { preview.textContent = text; },
-            onStateChange: ({ active }) => root.classList.toggle('b64c-request-active', active),
+            onStateChange: ({ active }) => {
+                root.classList.toggle('b64c-request-active', active);
+                if (!active) {
+                    scheduleBadgeSync();
+                }
+            },
         })
         : null;
     let toastTimer = null;
+    let badgeSyncTimer = null;
     let dragOrigin = null;
 
     function showStatus(message) {
@@ -174,7 +193,7 @@ function mount() {
         undoButton.disabled = !controller.canUndo();
     }
 
-    function convert() {
+    function manualConvert() {
         const result = controller.encode();
         syncUndoState();
         const messages = {
@@ -192,6 +211,17 @@ function mount() {
         };
         const successMessage = successMessages[result.settings?.mode] ?? '已转换';
         showStatus(result.ok ? successMessage : (messages[result.code] ?? '未执行转换'));
+    }
+
+    function toggleOutgoing() {
+        settings = { ...settings, outgoingAdapterEnabled: !settings.outgoingAdapterEnabled };
+        saveSettings(settings);
+        syncSettingsUI();
+        updatePreview();
+        if (!settings.outgoingAdapterEnabled) {
+            temporaryMessageAdapter?.restore('disabled');
+        }
+        showStatus(settings.outgoingAdapterEnabled ? '发送时编码：已开启' : '发送时编码：已关闭');
     }
 
     function positionMenu() {
@@ -214,12 +244,16 @@ function mount() {
 
     function syncSettingsUI() {
         modeSelect.value = settings.mode;
+        outgoingModeSelect.value = settings.outgoingMode;
         chunkSizeInput.value = String(settings.chunkSize);
         preserveInput.checked = settings.preserveTechnical;
         outgoingInput.checked = settings.outgoingAdapterEnabled;
         responseInput.checked = settings.responseNormalizerEnabled;
-        chunkField.hidden = settings.mode === 'whole';
+        chunkField.hidden = settings.mode === 'whole' && settings.outgoingMode === 'whole';
         preserveInput.disabled = settings.mode === 'structured';
+        sendStatus.hidden = !settings.outgoingAdapterEnabled;
+        root.classList.toggle('b64c-send-enabled', settings.outgoingAdapterEnabled);
+        action.setAttribute('aria-pressed', String(settings.outgoingAdapterEnabled));
         settingsHint.textContent = settings.mode === 'structured'
             ? '结构化封装会编码完整原文，不应用格式保留'
             : '围栏/行内代码、Markdown 链接、HTML 标签保持原样';
@@ -238,7 +272,7 @@ function mount() {
                 ? lastMessage.mes
                 : '';
         preview.textContent = source.length > 0
-            ? buildScatterTransport(source, settings.chunkSize)
+            ? buildRequestTransport(source, settings)
             : '没有可预览的发送文本。';
     }
 
@@ -252,6 +286,7 @@ function mount() {
             ...normalizePipelineSettings({
                 outgoingAdapterEnabled: outgoingInput.checked,
                 responseNormalizerEnabled: responseInput.checked,
+                outgoingMode: outgoingModeSelect.value,
             }),
         };
         syncSettingsUI();
@@ -290,7 +325,7 @@ function mount() {
     }
 
     const interaction = createPointerInteraction({
-        onTap: convert,
+        onTap: toggleOutgoing,
         onLongPress: () => setMenuOpen(menu.hidden),
         onDragStart: () => {
             const rect = action.getBoundingClientRect();
@@ -352,6 +387,40 @@ function mount() {
         showStatus(messages[result.code] ?? '未执行撤销');
     }
 
+    function onManualConvert(event) {
+        event.stopPropagation();
+        manualConvert();
+        setMenuOpen(false);
+    }
+
+    function syncMessageBadges() {
+        document.querySelectorAll('#chat .b64c-message-badge').forEach((badge) => badge.remove());
+        if (!Array.isArray(context?.chat)) {
+            return;
+        }
+
+        context.chat.forEach((message, messageId) => {
+            if (!message?.is_user || message.extra?.[MESSAGE_TRANSPORT_APPLIED] !== true) {
+                return;
+            }
+            const messageElement = document.querySelector(`#chat .mes[mesid="${messageId}"]`);
+            const messageText = messageElement?.querySelector('.mes_text');
+            if (!messageText) {
+                return;
+            }
+            const badge = document.createElement('span');
+            badge.className = 'b64c-message-badge';
+            badge.textContent = '已编码';
+            badge.title = '本条消息曾完成发送载荷编码；不代表模型已接收';
+            messageText.insertAdjacentElement('afterend', badge);
+        });
+    }
+
+    function scheduleBadgeSync() {
+        clearTimeout(badgeSyncTimer);
+        badgeSyncTimer = setTimeout(syncMessageBadges, 0);
+    }
+
     function onDocumentInput(event) {
         const result = controller.handleInput(event);
         if (result.invalidated) {
@@ -369,9 +438,21 @@ function mount() {
         }
     }
 
+    const badgeEvents = context?.eventSource ? [
+        context.event_types?.USER_MESSAGE_RENDERED,
+        context.event_types?.MESSAGE_SENT,
+        context.event_types?.MESSAGE_EDITED,
+        context.event_types?.MESSAGE_UPDATED,
+        context.event_types?.MESSAGE_DELETED,
+        context.event_types?.MORE_MESSAGES_LOADED,
+        context.event_types?.CHAT_CHANGED,
+        context.event_types?.CHAT_LOADED,
+    ].filter(Boolean) : [];
+
     const savedPosition = loadSavedPosition();
     syncSettingsUI();
     updatePreview();
+    scheduleBadgeSync();
     if (settings.responseNormalizerEnabled) {
         fetchNormalizer.enable();
     }
@@ -389,7 +470,9 @@ function mount() {
     action.addEventListener('pointercancel', onPointerCancel);
     action.addEventListener('contextmenu', onContextMenu);
     undoButton.addEventListener('click', onUndo);
+    manualButton.addEventListener('click', onManualConvert);
     modeSelect.addEventListener('change', updateSettings);
+    outgoingModeSelect.addEventListener('change', updateSettings);
     chunkSizeInput.addEventListener('change', updateSettings);
     preserveInput.addEventListener('change', updateSettings);
     outgoingInput.addEventListener('change', updateSettings);
@@ -400,9 +483,13 @@ function mount() {
     window.addEventListener('resize', keepInViewport);
     window.visualViewport?.addEventListener('resize', keepInViewport);
     window.visualViewport?.addEventListener('scroll', keepInViewport);
+    for (const eventName of badgeEvents) {
+        context.eventSource.on(eventName, scheduleBadgeSync);
+    }
 
     cleanupCurrentMount = () => {
         clearTimeout(toastTimer);
+        clearTimeout(badgeSyncTimer);
         interaction.destroy();
         action.removeEventListener('pointerdown', onPointerDown);
         action.removeEventListener('pointermove', onPointerMove);
@@ -410,7 +497,9 @@ function mount() {
         action.removeEventListener('pointercancel', onPointerCancel);
         action.removeEventListener('contextmenu', onContextMenu);
         undoButton.removeEventListener('click', onUndo);
+        manualButton.removeEventListener('click', onManualConvert);
         modeSelect.removeEventListener('change', updateSettings);
+        outgoingModeSelect.removeEventListener('change', updateSettings);
         chunkSizeInput.removeEventListener('change', updateSettings);
         preserveInput.removeEventListener('change', updateSettings);
         outgoingInput.removeEventListener('change', updateSettings);
@@ -421,6 +510,10 @@ function mount() {
         window.removeEventListener('resize', keepInViewport);
         window.visualViewport?.removeEventListener('resize', keepInViewport);
         window.visualViewport?.removeEventListener('scroll', keepInViewport);
+        for (const eventName of badgeEvents) {
+            context.eventSource.removeListener?.(eventName, scheduleBadgeSync);
+        }
+        document.querySelectorAll('#chat .b64c-message-badge').forEach((badge) => badge.remove());
         temporaryMessageAdapter?.destroy();
         fetchNormalizer.destroy();
         root.remove();

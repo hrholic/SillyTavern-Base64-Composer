@@ -4,9 +4,12 @@ import test from 'node:test';
 
 import {
     buildScatterTransport,
+    buildRequestTransport,
     createScopedFetchNormalizer,
     createTemporaryMessageAdapter,
     decodeScatterTransport,
+    MESSAGE_TRANSPORT_APPLIED,
+    MESSAGE_TRANSPORT_MARKER,
     normalizeChatCompletionResponse,
     normalizeCompletionObject,
 } from '../pipeline.js';
@@ -24,6 +27,16 @@ test('scatter transport preserves Unicode and every whitespace character exactly
     const transport = buildScatterTransport(original, 3);
     assert.match(transport, /^\[BASE64-SCATTER\/1\]/);
     assert.equal(decodeScatterTransport(transport), original);
+});
+
+test('request preview and preparation share whole/chunked transport behavior', () => {
+    const original = '中文🙂abcdef';
+    const whole = buildRequestTransport(original, { outgoingMode: 'whole', chunkSize: 2 });
+    const chunked = buildRequestTransport(original, { outgoingMode: 'chunked', chunkSize: 2 });
+    assert.equal(decodeScatterTransport(whole), original);
+    assert.equal(decodeScatterTransport(chunked), original);
+    assert.equal(whole.split('\n').filter((line) => /^\d+\/\d+:/.test(line)).length, 1);
+    assert.ok(chunked.split('\n').filter((line) => /^\d+\/\d+:/.test(line)).length > 1);
 });
 
 test('outgoing adapter swaps the last user message only until request data is ready', () => {
@@ -44,6 +57,8 @@ test('outgoing adapter swaps the last user message only until request data is re
     });
 
     eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    assert.equal(message.extra[MESSAGE_TRANSPORT_MARKER], true);
+    assert.equal(message.extra[MESSAGE_TRANSPORT_APPLIED], undefined);
     assert.equal(message.mes, preview);
     assert.equal(message.swipes[0], preview);
     assert.equal(decodeScatterTransport(preview), original);
@@ -51,7 +66,45 @@ test('outgoing adapter swaps the last user message only until request data is re
     eventSource.emit(eventTypes.GENERATE_AFTER_DATA, { prompt: 'already assembled' }, false);
     assert.equal(message.mes, original);
     assert.equal(message.swipes[0], original);
+    assert.equal(message.extra[MESSAGE_TRANSPORT_APPLIED], true);
     assert.deepEqual(states.map((state) => state.active), [true, false]);
+    adapter.destroy();
+});
+
+test('only the current enabled send and previously marked history are transported', () => {
+    const eventSource = new EventEmitter();
+    const oldUnmarked = { is_user: true, mes: 'old plain history' };
+    const oldMarked = {
+        is_user: true,
+        mes: 'old opted-in history',
+        extra: { [MESSAGE_TRANSPORT_MARKER]: true, [MESSAGE_TRANSPORT_APPLIED]: true },
+    };
+    const assistant = { is_user: false, mes: 'assistant reply' };
+    const current = { is_user: true, mes: 'current send' };
+    const chat = [oldUnmarked, oldMarked, assistant, current];
+    const adapter = createTemporaryMessageAdapter({
+        eventSource,
+        eventTypes,
+        getChat: () => chat,
+        getSettings: () => ({ outgoingAdapterEnabled: true }),
+        getTransportSettings: () => ({ outgoingMode: 'chunked', chunkSize: 4 }),
+    });
+
+    eventSource.emit(eventTypes.GENERATION_STARTED, 'normal', {}, false);
+    assert.equal(oldUnmarked.mes, 'old plain history');
+    assert.equal(assistant.mes, 'assistant reply');
+    assert.equal(decodeScatterTransport(oldMarked.mes), 'old opted-in history');
+    assert.equal(decodeScatterTransport(current.mes), 'current send');
+    eventSource.emit(eventTypes.GENERATE_AFTER_DATA, {});
+    assert.equal(oldMarked.mes, 'old opted-in history');
+    assert.equal(current.mes, 'current send');
+
+    eventSource.emit(eventTypes.GENERATION_STARTED, 'regenerate', {}, false);
+    assert.equal(oldUnmarked.mes, 'old plain history');
+    assert.equal(decodeScatterTransport(oldMarked.mes), 'old opted-in history');
+    assert.equal(decodeScatterTransport(current.mes), 'current send');
+    eventSource.emit(eventTypes.GENERATION_STOPPED);
+    assert.equal(current.mes, 'current send');
     adapter.destroy();
 });
 

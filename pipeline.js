@@ -1,16 +1,20 @@
 import { base64ToUtf8, utf8ToBase64 } from './core.js';
 
 export const CHAT_COMPLETION_ENDPOINT = '/api/backends/chat-completions/generate';
+export const MESSAGE_TRANSPORT_MARKER = 'base64_composer_transport_v1';
+export const MESSAGE_TRANSPORT_APPLIED = 'base64_composer_transport_applied_v1';
 
 export const DEFAULT_PIPELINE_SETTINGS = Object.freeze({
     outgoingAdapterEnabled: false,
     responseNormalizerEnabled: false,
+    outgoingMode: 'chunked',
 });
 
 export function normalizePipelineSettings(settings = {}) {
     return {
         outgoingAdapterEnabled: settings.outgoingAdapterEnabled === true,
         responseNormalizerEnabled: settings.responseNormalizerEnabled === true,
+        outgoingMode: settings.outgoingMode === 'whole' ? 'whole' : 'chunked',
     };
 }
 
@@ -59,44 +63,61 @@ export function decodeScatterTransport(transport) {
     }).join('');
 }
 
+/** The single conversion entry used by both preview and request preparation. */
+export function buildRequestTransport(text, settings = {}) {
+    const mode = settings.outgoingMode === 'whole' ? 'whole' : 'chunked';
+    const chunkSize = mode === 'whole' ? Math.max(1, Array.from(text).length) : settings.chunkSize;
+    return buildScatterTransport(text, chunkSize);
+}
+
 /**
- * Temporarily swaps only the last user message during a normal generation.
- * The original is restored once generate_data exists, plus stop/end fallbacks.
+ * A normal send made while enabled marks only that new user message. Marked
+ * messages keep their transport choice when they re-enter later prompts, while
+ * old/unmarked history stays untouched. Text is always restored after assembly.
  */
 export function createTemporaryMessageAdapter({
     eventSource,
     eventTypes,
     getChat,
     getSettings,
-    getChunkSize = () => 8,
+    getTransportSettings = () => ({ outgoingMode: 'chunked', chunkSize: 8 }),
     onPreview = () => {},
     onStateChange = () => {},
 }) {
     let active = null;
+    const supportedGenerationTypes = new Set(['normal', 'regenerate', 'swipe', 'continue']);
 
     function restore(reason = 'restore') {
         if (!active) {
             return false;
         }
 
-        const record = active;
+        const records = active.records;
         active = null;
 
-        if (record.message.mes === record.prepared) {
-            record.message.mes = record.original;
-        }
-        if (record.swipeChanged
-            && record.message.swipes?.[record.swipeId] === record.prepared) {
-            record.message.swipes[record.swipeId] = record.originalSwipe;
+        for (const record of records) {
+            if (record.message.mes === record.prepared) {
+                record.message.mes = record.original;
+            }
+            if (record.swipeChanged
+                && record.message.swipes?.[record.swipeId] === record.prepared) {
+                record.message.swipes[record.swipeId] = record.originalSwipe;
+            }
+            if (reason === 'request-ready') {
+                record.message.extra = record.message.extra && typeof record.message.extra === 'object'
+                    ? record.message.extra
+                    : {};
+                record.message.extra[MESSAGE_TRANSPORT_APPLIED] = true;
+            }
         }
 
-        onStateChange({ active: false, reason });
+        onStateChange({ active: false, reason, count: records.length });
         return true;
     }
 
     function prepare(type, options = {}, dryRun = false) {
         if (dryRun
-            || type !== 'normal'
+            || !supportedGenerationTypes.has(type)
             || options?.quiet_prompt
             || !getSettings().outgoingAdapterEnabled
             || active) {
@@ -104,36 +125,56 @@ export function createTemporaryMessageAdapter({
         }
 
         const chat = getChat();
-        const message = Array.isArray(chat) ? chat.at(-1) : null;
-        if (!message?.is_user || typeof message.mes !== 'string') {
+        if (!Array.isArray(chat)) {
             return false;
         }
 
-        const original = message.mes;
-        const prepared = buildScatterTransport(original, getChunkSize());
-        if (decodeScatterTransport(prepared) !== original) {
+        if (type === 'normal') {
+            const currentMessage = chat.at(-1);
+            if (currentMessage?.is_user && typeof currentMessage.mes === 'string') {
+                currentMessage.extra = currentMessage.extra && typeof currentMessage.extra === 'object'
+                    ? currentMessage.extra
+                    : {};
+                currentMessage.extra[MESSAGE_TRANSPORT_MARKER] = true;
+            }
+        }
+
+        const records = [];
+        for (const message of chat) {
+            if (!message?.is_user
+                || message.extra?.[MESSAGE_TRANSPORT_MARKER] !== true
+                || typeof message.mes !== 'string'
+                || message.mes.length === 0) {
+                continue;
+            }
+
+            const original = message.mes;
+            const prepared = buildRequestTransport(original, getTransportSettings());
+            if (decodeScatterTransport(prepared) !== original) {
+                restore('round-trip-failed');
+                return false;
+            }
+
+            const swipeId = Number.isInteger(message.swipe_id) ? message.swipe_id : -1;
+            const originalSwipe = swipeId >= 0 ? message.swipes?.[swipeId] : undefined;
+            const swipeChanged = typeof originalSwipe === 'string' && originalSwipe === original;
+            records.push({ message, original, prepared, swipeId, originalSwipe, swipeChanged });
+        }
+
+        if (records.length === 0) {
             return false;
         }
 
-        const swipeId = Number.isInteger(message.swipe_id) ? message.swipe_id : -1;
-        const originalSwipe = swipeId >= 0 ? message.swipes?.[swipeId] : undefined;
-        const swipeChanged = typeof originalSwipe === 'string' && originalSwipe === original;
-
-        active = {
-            message,
-            original,
-            prepared,
-            swipeId,
-            originalSwipe,
-            swipeChanged,
-        };
-        message.mes = prepared;
-        if (swipeChanged) {
-            message.swipes[swipeId] = prepared;
+        active = { records };
+        for (const record of records) {
+            record.message.mes = record.prepared;
+            if (record.swipeChanged) {
+                record.message.swipes[record.swipeId] = record.prepared;
+            }
         }
 
-        onPreview(prepared);
-        onStateChange({ active: true, reason: 'prepare' });
+        onPreview(records.at(-1).prepared);
+        onStateChange({ active: true, reason: 'prepare', count: records.length });
         return true;
     }
 

@@ -1,7 +1,10 @@
 #base64-composer-float {
-    --b64c-border: rgba(255, 255, 255, 0.42);
-    --b64c-bg: rgba(24, 24, 30, 0.62);
-    --b64c-text: rgba(255, 255, 255, 0.92);
+    --b64c-border: rgba(255, 255, 255, 0.5);
+    --b64c-border-active: rgba(255, 255, 255, 0.9);
+    --b64c-bg: rgba(24, 24, 30, 0.5);
+    --b64c-text: #fff;
+    --b64c-muted: rgba(255, 255, 255, 0.72);
+    --b64c-inner: rgba(0, 0, 0, 0.14);
     position: fixed;
     right: max(12px, env(safe-area-inset-right));
     bottom: max(90px, calc(env(safe-area-inset-bottom) + 70px));
@@ -14,6 +17,15 @@
     -webkit-user-select: none;
 }
 
+#base64-composer-float[data-theme="light"] {
+    --b64c-border: rgba(24, 24, 30, 0.5);
+    --b64c-border-active: rgba(24, 24, 30, 0.9);
+    --b64c-bg: rgba(246, 246, 248, 0.5);
+    --b64c-text: #202025;
+    --b64c-muted: rgba(32, 32, 37, 0.7);
+    --b64c-inner: rgba(255, 255, 255, 0.22);
+}
+
 #base64-composer-float .b64c-action {
     position: relative;
     width: 48px;
@@ -24,9 +36,9 @@
     border-radius: 10px;
     background: var(--b64c-bg);
     color: var(--b64c-text);
-    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
-    backdrop-filter: blur(5px);
-    -webkit-backdrop-filter: blur(5px);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     font: 650 12px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     letter-spacing: 0.15px;
     cursor: grab;
@@ -34,49 +46,18 @@
     -webkit-tap-highlight-color: transparent;
 }
 
-#base64-composer-float.b64c-request-active .b64c-action::after {
-    content: "";
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #77d995;
-    box-shadow: 0 0 5px rgba(119, 217, 149, 0.9);
-}
-
 #base64-composer-float.b64c-send-enabled .b64c-action {
-    border-color: rgba(119, 217, 149, 0.72);
-}
-
-#base64-composer-float .b64c-send-status {
-    position: absolute;
-    top: calc(100% + 3px);
-    left: 50%;
-    padding: 2px 4px;
-    border-radius: 4px;
-    background: rgba(24, 24, 30, 0.62);
-    color: rgba(255, 255, 255, 0.66);
-    font: 9px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    white-space: nowrap;
-    pointer-events: none;
-    transform: translateX(-50%);
-}
-
-#base64-composer-float .b64c-send-status[hidden] {
-    display: none;
+    border-color: var(--b64c-border-active);
 }
 
 #base64-composer-float .b64c-action:focus-visible,
-#base64-composer-float .b64c-undo:focus-visible {
-    outline: 2px solid rgba(125, 190, 255, 0.95);
+#base64-composer-float .b64c-theme:focus-visible {
+    outline: 1px solid var(--b64c-text);
     outline-offset: 2px;
 }
 
 #base64-composer-float.b64c-dragging .b64c-action {
     cursor: grabbing;
-    opacity: 0.88;
 }
 
 #base64-composer-float .b64c-menu {
@@ -90,10 +71,11 @@
     box-sizing: border-box;
     border: 1px solid var(--b64c-border);
     border-radius: 9px;
-    background: rgba(24, 24, 30, 0.88);
-    box-shadow: 0 5px 18px rgba(0, 0, 0, 0.24);
-    backdrop-filter: blur(7px);
-    -webkit-backdrop-filter: blur(7px);
+    background: var(--b64c-bg);
+    color: var(--b64c-text);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
 }
 
 #base64-composer-float.b64c-menu-below .b64c-menu {
@@ -110,18 +92,24 @@
     display: none;
 }
 
-#base64-composer-float .b64c-manual,
-#base64-composer-float .b64c-undo {
-    width: 100%;
-    min-height: 32px;
-    padding: 6px 9px;
-    border: 0;
+#base64-composer-float .b64c-menu-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 28px;
+    color: var(--b64c-text);
+    font: 650 12px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#base64-composer-float .b64c-theme {
+    width: 28px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--b64c-border);
     border-radius: 6px;
     background: transparent;
     color: var(--b64c-text);
-    font: 13px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    text-align: left;
-    white-space: nowrap;
+    font: 14px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Symbol", sans-serif;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
 }
@@ -137,11 +125,6 @@
     font: 12px/1.25 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-#base64-composer-float .b64c-check:has(input:disabled) {
-    opacity: 0.48;
-    cursor: default;
-}
-
 #base64-composer-float .b64c-field[hidden] {
     display: none;
 }
@@ -151,40 +134,38 @@
     cursor: pointer;
 }
 
-#base64-composer-float .b64c-mode,
-#base64-composer-float .b64c-outgoing-mode,
+#base64-composer-float .b64c-check input {
+    accent-color: #888;
+}
+
 #base64-composer-float .b64c-chunk-size {
     width: 86px;
     min-height: 27px;
     box-sizing: border-box;
-    border: 1px solid rgba(255, 255, 255, 0.24);
+    border: 1px solid var(--b64c-border);
     border-radius: 6px;
-    background: rgba(0, 0, 0, 0.24);
+    background: var(--b64c-inner);
     color: var(--b64c-text);
     font: 12px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-#base64-composer-float .b64c-hint {
-    margin: 2px 0 5px;
-    color: rgba(255, 255, 255, 0.62);
-    font: 10px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-#base64-composer-float .b64c-divider {
-    height: 1px;
-    margin: 5px 0;
-    background: rgba(255, 255, 255, 0.14);
-}
-
 #base64-composer-float .b64c-pipeline-hint {
     margin: 2px 0 5px;
-    color: rgba(255, 255, 255, 0.62);
+    color: var(--b64c-muted);
     font: 10px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#base64-composer-float .b64c-pipeline-hint summary {
+    cursor: pointer;
+}
+
+#base64-composer-float .b64c-pipeline-hint div {
+    margin-top: 4px;
 }
 
 #base64-composer-float .b64c-preview-wrap {
     margin: 3px 0 6px;
-    color: rgba(255, 255, 255, 0.78);
+    color: var(--b64c-muted);
     font: 11px/1.3 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -197,47 +178,27 @@
     margin: 5px 0 0;
     padding: 6px;
     overflow: auto;
-    border: 1px solid rgba(255, 255, 255, 0.16);
+    border: 1px solid var(--b64c-border);
     border-radius: 5px;
-    background: rgba(0, 0, 0, 0.22);
-    color: rgba(255, 255, 255, 0.84);
+    background: var(--b64c-inner);
+    color: var(--b64c-text);
     font: 10px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
     white-space: pre-wrap;
     user-select: text;
     -webkit-user-select: text;
 }
 
-#base64-composer-float .b64c-undo {
-    border-top: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 0 0 6px 6px;
-}
-
-#base64-composer-float .b64c-manual {
-    border-top: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 0;
-}
-
-#base64-composer-float .b64c-manual:hover,
-#base64-composer-float .b64c-undo:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.1);
-}
-
 #chat .b64c-message-badge {
     display: inline-block;
     margin: 3px 0 0 6px;
     padding: 1px 5px;
-    border: 1px solid rgba(128, 190, 150, 0.28);
+    border: 1px solid rgba(145, 145, 150, 0.38);
     border-radius: 999px;
-    color: rgba(180, 220, 192, 0.62);
+    color: rgba(145, 145, 150, 0.8);
     font: 9px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     vertical-align: middle;
     user-select: none;
     -webkit-user-select: none;
-}
-
-#base64-composer-float .b64c-undo:disabled {
-    opacity: 0.42;
-    cursor: default;
 }
 
 #base64-composer-float .b64c-toast {
@@ -246,10 +207,10 @@
     bottom: calc(100% + 7px);
     max-width: min(210px, calc(100vw - 24px));
     padding: 5px 8px;
-    border: 1px solid rgba(255, 255, 255, 0.24);
+    border: 1px solid var(--b64c-border);
     border-radius: 7px;
-    background: rgba(20, 20, 24, 0.9);
-    color: rgba(255, 255, 255, 0.94);
+    background: var(--b64c-bg);
+    color: var(--b64c-text);
     font: 12px/1.3 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     white-space: nowrap;
     pointer-events: none;

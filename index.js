@@ -1,6 +1,5 @@
 import {
     clampPosition,
-    createComposerController,
     createPointerInteraction,
     createTextareaTargetResolver,
     DEFAULT_ENCODING_SETTINGS,
@@ -58,9 +57,18 @@ function loadSettings() {
         return {
             ...normalizeEncodingSettings(stored),
             ...normalizePipelineSettings(stored),
+            mode: 'structured',
+            outgoingMode: 'chunked',
+            theme: stored.theme === 'light' ? 'light' : 'dark',
         };
     } catch {
-        return { ...DEFAULT_ENCODING_SETTINGS, ...DEFAULT_PIPELINE_SETTINGS };
+        return {
+            ...DEFAULT_ENCODING_SETTINGS,
+            ...DEFAULT_PIPELINE_SETTINGS,
+            mode: 'structured',
+            outgoingMode: 'chunked',
+            theme: 'dark',
+        };
     }
 }
 
@@ -80,48 +88,31 @@ function createFloatingControl() {
         <button class="b64c-action" type="button" aria-label="轻点切换发送时编码；长按打开更多选项" aria-expanded="false">
             <span aria-hidden="true">B64</span>
         </button>
-        <span class="b64c-send-status" hidden>发送时编码</span>
         <div class="b64c-menu" role="menu" hidden>
-            <label class="b64c-field">
-                <span>手动工具模式</span>
-                <select class="b64c-mode">
-                    <option value="whole">整段</option>
-                    <option value="chunked">分块</option>
-                    <option value="structured">结构化封装</option>
-                </select>
-            </label>
-            <label class="b64c-field">
-                <span>发送编码</span>
-                <select class="b64c-outgoing-mode">
-                    <option value="chunked">分块</option>
-                    <option value="whole">整段</option>
-                </select>
-            </label>
-            <label class="b64c-field b64c-chunk-field" hidden>
+            <div class="b64c-menu-head">
+                <span>B64</span>
+                <button class="b64c-theme" type="button" role="menuitem" aria-label="切换日间配色"></button>
+            </div>
+            <label class="b64c-field b64c-chunk-field">
                 <span>每块字符</span>
                 <input class="b64c-chunk-size" type="number" min="1" max="1000" step="1" inputmode="numeric" value="8">
             </label>
             <label class="b64c-check">
-                <input class="b64c-preserve" type="checkbox">
-                <span>保留技术格式</span>
-            </label>
-            <div class="b64c-hint"></div>
-            <div class="b64c-divider" aria-hidden="true"></div>
-            <label class="b64c-check">
                 <input class="b64c-outgoing" type="checkbox">
-                <span>发送前处理</span>
+                <span>发送时编码</span>
             </label>
             <label class="b64c-check">
                 <input class="b64c-response" type="checkbox">
                 <span>响应正文提取</span>
             </label>
-            <div class="b64c-pipeline-hint">仅支持普通发送与 OpenAI 兼容聊天生成接口；默认关闭</div>
+            <details class="b64c-pipeline-hint">
+                <summary>说明</summary>
+                <div>发送时编码仅在请求装配时临时生效；响应正文提取只适配工具参数正文，不做 Base64 解码。</div>
+            </details>
             <details class="b64c-preview-wrap">
                 <summary>实际发送预览</summary>
                 <pre class="b64c-preview"></pre>
             </details>
-            <button class="b64c-manual" type="button" role="menuitem">手动替换当前输入框</button>
-            <button class="b64c-undo" type="button" role="menuitem" disabled>撤销转换</button>
         </div>
         <div class="b64c-toast" role="status" aria-live="polite"></div>
     `;
@@ -136,28 +127,17 @@ function mount() {
     const root = createFloatingControl();
     const action = root.querySelector('.b64c-action');
     const menu = root.querySelector('.b64c-menu');
-    const undoButton = root.querySelector('.b64c-undo');
     const toast = root.querySelector('.b64c-toast');
-    const modeSelect = root.querySelector('.b64c-mode');
     const chunkField = root.querySelector('.b64c-chunk-field');
     const chunkSizeInput = root.querySelector('.b64c-chunk-size');
-    const outgoingModeSelect = root.querySelector('.b64c-outgoing-mode');
-    const preserveInput = root.querySelector('.b64c-preserve');
     const outgoingInput = root.querySelector('.b64c-outgoing');
     const responseInput = root.querySelector('.b64c-response');
     const preview = root.querySelector('.b64c-preview');
-    const manualButton = root.querySelector('.b64c-manual');
-    const sendStatus = root.querySelector('.b64c-send-status');
-    const settingsHint = root.querySelector('.b64c-hint');
+    const themeButton = root.querySelector('.b64c-theme');
     let settings = loadSettings();
     const targetResolver = createTextareaTargetResolver(document, {
         composerSelector: TEXTAREA_SELECTOR,
     });
-    const controller = createComposerController(
-        targetResolver.resolve,
-        undefined,
-        () => settings,
-    );
     const fetchNormalizer = createScopedFetchNormalizer(window);
     const context = globalThis.SillyTavern?.getContext?.();
     const temporaryMessageAdapter = context?.eventSource && context?.event_types
@@ -189,30 +169,6 @@ function mount() {
         }, 1600);
     }
 
-    function syncUndoState() {
-        undoButton.disabled = !controller.canUndo();
-    }
-
-    function manualConvert() {
-        const result = controller.encode();
-        syncUndoState();
-        const messages = {
-            empty: '输入框为空',
-            already_encoded: '已转换，请勿重复点击',
-            round_trip_failed: '校验未通过，未替换',
-            conversion_failed: '转换失败，未替换',
-            no_target: '没有可转换的输入框',
-            nothing_to_encode: '没有需要编码的正文',
-        };
-        const successMessages = {
-            whole: '已整段转换',
-            chunked: '已分块转换',
-            structured: '已结构化封装',
-        };
-        const successMessage = successMessages[result.settings?.mode] ?? '已转换';
-        showStatus(result.ok ? successMessage : (messages[result.code] ?? '未执行转换'));
-    }
-
     function toggleOutgoing() {
         settings = { ...settings, outgoingAdapterEnabled: !settings.outgoingAdapterEnabled };
         saveSettings(settings);
@@ -237,31 +193,30 @@ function mount() {
         action.setAttribute('aria-expanded', String(open));
         if (open) {
             positionMenu();
-            syncUndoState();
             updatePreview();
         }
     }
 
     function syncSettingsUI() {
-        modeSelect.value = settings.mode;
-        outgoingModeSelect.value = settings.outgoingMode;
         chunkSizeInput.value = String(settings.chunkSize);
-        preserveInput.checked = settings.preserveTechnical;
         outgoingInput.checked = settings.outgoingAdapterEnabled;
         responseInput.checked = settings.responseNormalizerEnabled;
-        chunkField.hidden = settings.mode === 'whole' && settings.outgoingMode === 'whole';
-        preserveInput.disabled = settings.mode === 'structured';
-        sendStatus.hidden = !settings.outgoingAdapterEnabled;
+        chunkField.hidden = false;
         root.classList.toggle('b64c-send-enabled', settings.outgoingAdapterEnabled);
+        root.dataset.theme = settings.theme;
         action.setAttribute('aria-pressed', String(settings.outgoingAdapterEnabled));
-        settingsHint.textContent = settings.mode === 'structured'
-            ? '结构化封装会编码完整原文，不应用格式保留'
-            : '围栏/行内代码、Markdown 链接、HTML 标签保持原样';
+        action.setAttribute('aria-label', settings.outgoingAdapterEnabled
+            ? '发送时编码已开启；轻点关闭，长按打开更多选项'
+            : '发送时编码已关闭；轻点开启，长按打开更多选项');
+        action.title = action.getAttribute('aria-label');
+        themeButton.textContent = settings.theme === 'light' ? '☀' : '☾';
+        themeButton.setAttribute('aria-label', settings.theme === 'light' ? '切换夜间配色' : '切换日间配色');
+        themeButton.title = themeButton.getAttribute('aria-label');
     }
 
     function updatePreview() {
         if (!settings.outgoingAdapterEnabled) {
-            preview.textContent = '发送前处理已关闭；不会修改请求。';
+            preview.textContent = '发送时编码已关闭；不会修改请求。';
             return;
         }
         const targetText = targetResolver.resolve()?.value;
@@ -279,15 +234,16 @@ function mount() {
     function updateSettings() {
         settings = {
             ...normalizeEncodingSettings({
-                mode: modeSelect.value,
+                mode: 'structured',
                 chunkSize: chunkSizeInput.value,
-                preserveTechnical: preserveInput.checked,
+                preserveTechnical: false,
             }),
             ...normalizePipelineSettings({
                 outgoingAdapterEnabled: outgoingInput.checked,
                 responseNormalizerEnabled: responseInput.checked,
-                outgoingMode: outgoingModeSelect.value,
+                outgoingMode: 'chunked',
             }),
+            theme: settings.theme,
         };
         syncSettingsUI();
         saveSettings(settings);
@@ -300,6 +256,13 @@ function mount() {
         if (!settings.outgoingAdapterEnabled) {
             temporaryMessageAdapter?.restore('disabled');
         }
+    }
+
+    function toggleTheme(event) {
+        event.stopPropagation();
+        settings = { ...settings, theme: settings.theme === 'light' ? 'dark' : 'light' };
+        saveSettings(settings);
+        syncSettingsUI();
     }
 
     function applyPosition(position, persist = false) {
@@ -373,26 +336,6 @@ function mount() {
         event.preventDefault();
     }
 
-    function onUndo(event) {
-        event.stopPropagation();
-        const result = controller.undo();
-        syncUndoState();
-        setMenuOpen(false);
-        const messages = {
-            undone: '已撤销',
-            nothing_to_undo: '没有可撤销的转换',
-            content_changed: '内容已改动，未覆盖',
-            target_unavailable: '原编辑框已关闭，未覆盖',
-        };
-        showStatus(messages[result.code] ?? '未执行撤销');
-    }
-
-    function onManualConvert(event) {
-        event.stopPropagation();
-        manualConvert();
-        setMenuOpen(false);
-    }
-
     function syncMessageBadges() {
         document.querySelectorAll('#chat .b64c-message-badge').forEach((badge) => badge.remove());
         if (!Array.isArray(context?.chat)) {
@@ -419,13 +362,6 @@ function mount() {
     function scheduleBadgeSync() {
         clearTimeout(badgeSyncTimer);
         badgeSyncTimer = setTimeout(syncMessageBadges, 0);
-    }
-
-    function onDocumentInput(event) {
-        const result = controller.handleInput(event);
-        if (result.invalidated) {
-            syncUndoState();
-        }
     }
 
     function onDocumentFocusIn(event) {
@@ -469,15 +405,10 @@ function mount() {
     action.addEventListener('pointerup', onPointerUp);
     action.addEventListener('pointercancel', onPointerCancel);
     action.addEventListener('contextmenu', onContextMenu);
-    undoButton.addEventListener('click', onUndo);
-    manualButton.addEventListener('click', onManualConvert);
-    modeSelect.addEventListener('change', updateSettings);
-    outgoingModeSelect.addEventListener('change', updateSettings);
+    themeButton.addEventListener('click', toggleTheme);
     chunkSizeInput.addEventListener('change', updateSettings);
-    preserveInput.addEventListener('change', updateSettings);
     outgoingInput.addEventListener('change', updateSettings);
     responseInput.addEventListener('change', updateSettings);
-    document.addEventListener('input', onDocumentInput, true);
     document.addEventListener('focusin', onDocumentFocusIn, true);
     document.addEventListener('pointerdown', onOutsidePointerDown, true);
     window.addEventListener('resize', keepInViewport);
@@ -496,15 +427,10 @@ function mount() {
         action.removeEventListener('pointerup', onPointerUp);
         action.removeEventListener('pointercancel', onPointerCancel);
         action.removeEventListener('contextmenu', onContextMenu);
-        undoButton.removeEventListener('click', onUndo);
-        manualButton.removeEventListener('click', onManualConvert);
-        modeSelect.removeEventListener('change', updateSettings);
-        outgoingModeSelect.removeEventListener('change', updateSettings);
+        themeButton.removeEventListener('click', toggleTheme);
         chunkSizeInput.removeEventListener('change', updateSettings);
-        preserveInput.removeEventListener('change', updateSettings);
         outgoingInput.removeEventListener('change', updateSettings);
         responseInput.removeEventListener('change', updateSettings);
-        document.removeEventListener('input', onDocumentInput, true);
         document.removeEventListener('focusin', onDocumentFocusIn, true);
         document.removeEventListener('pointerdown', onOutsidePointerDown, true);
         window.removeEventListener('resize', keepInViewport);

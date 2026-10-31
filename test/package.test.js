@@ -9,7 +9,7 @@ test('manifest declares the supported frontend files and disables unpublished au
     assert.equal(manifest.js, 'index.js');
     assert.equal(manifest.css, 'style.css');
     assert.equal(manifest.auto_update, false);
-    assert.equal(typeof manifest.display_name, 'string');
+    assert.equal(manifest.display_name, 'B64');
     assert.equal(typeof manifest.author, 'string');
 });
 
@@ -17,6 +17,11 @@ test('UI keeps the requested 1px border and touch-safe drag behavior', async () 
     const css = await readFile(new URL('style.css', projectRoot), 'utf8');
     assert.match(css, /border:\s*1px solid var\(--b64c-border\)/);
     assert.match(css, /touch-action:\s*none/);
+    assert.match(css, /--b64c-bg:\s*rgba\([^;]+,\s*0\.5\)/);
+    assert.match(css, /\[data-theme="light"\]/);
+    assert.match(css, /\.b64c-send-enabled \.b64c-action\s*\{\s*border-color:\s*var\(--b64c-border-active\)/);
+    assert.doesNotMatch(css, /77d995|119,\s*217,\s*149/);
+    assert.doesNotMatch(css, /b64c-request-active \.b64c-action::after/);
 });
 
 test('entrypoint keeps composer support and does not trigger send or generation calls', async () => {
@@ -24,6 +29,14 @@ test('entrypoint keeps composer support and does not trigger send or generation 
     assert.match(source, /#send_textarea/);
     assert.doesNotMatch(source, /send_but|generateRaw|generateQuietPrompt/);
     assert.match(source, /textContent = '已编码'/);
+    assert.doesNotMatch(source, /class="b64c-mode"|class="b64c-outgoing-mode"/);
+    assert.doesNotMatch(source, /b64c-manual|b64c-undo|b64c-preserve/);
+    assert.doesNotMatch(source, /b64c-send-status/);
+    assert.match(source, /class="b64c-theme"/);
+    assert.match(source, /<details class="b64c-pipeline-hint">/);
+    assert.match(source, /mode: 'structured'/);
+    assert.match(source, /outgoingMode: 'chunked'/);
+    assert.match(source, /theme: stored\.theme === 'light'/);
 });
 
 test('response adaptation is restricted to the OpenAI-compatible chat completion endpoint', async () => {

@@ -49,7 +49,7 @@ test('entrypoint keeps composer support and does not trigger send or generation 
     assert.match(source, /badge\.addEventListener\('click'/);
     assert.match(source, /panel\.hidden = !panel\.hidden/);
     assert.match(source, /copyText\(snapshot\.payload\)/);
-    assert.match(source, /context\.saveChat\?\.\(\)/);
+    assert.doesNotMatch(source, /context\.saveChat\?\.\(\)/);
 });
 
 test('response adaptation is restricted to the OpenAI-compatible chat completion endpoint', async () => {

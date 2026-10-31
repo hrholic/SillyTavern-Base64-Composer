@@ -167,14 +167,6 @@ function mount() {
                     scheduleBadgeSync();
                 }
             },
-            onSnapshotStored: () => {
-                try {
-                    const saveResult = context.saveChat?.();
-                    saveResult?.catch?.((error) => console.error('[B64] Failed to save encoded snapshot.', error));
-                } catch (error) {
-                    console.error('[B64] Failed to save encoded snapshot.', error);
-                }
-            },
         })
         : null;
     let toastTimer = null;

@@ -166,8 +166,14 @@
     cursor: pointer;
 }
 
-#base64-composer-float .b64c-pipeline-hint div {
-    margin-top: 4px;
+#base64-composer-float .b64c-pipeline-hint ul {
+    margin: 4px 0 0;
+    padding-inline-start: 16px;
+    overflow-wrap: anywhere;
+}
+
+#base64-composer-float .b64c-pipeline-hint li + li {
+    margin-top: 3px;
 }
 
 #base64-composer-float .b64c-preview-wrap {
